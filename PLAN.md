@@ -41,13 +41,13 @@ Pure functions, no server, no device assumptions. Fully unit-tested.
 
 ## 2. Server (`jeff/server/`)
 
-- [ ] FastAPI app: `POST /v1/systemone`, `GET /v1/models`, `GET /healthz`.
-- [ ] Bearer auth via `JEFF_API_KEYS` env (comma-separated); missing/invalid -> 401 jev-style error body.
-- [ ] Error parity: 401 / 422 / 429 (token-bucket per key) / 529 (queue full).
-- [ ] Request queue + **dynamic batcher**: coalesce requests for up to N ms or B items, one backend call. Configurable `JEFF_MAX_BATCH`, `JEFF_MAX_WAIT_MS`.
-- [ ] Backend selected by env: `JEFF_BACKEND=torch|onnx`, `JEFF_MODEL=...`, `JEFF_DEVICE=cuda|mps|cpu`.
-- [ ] Limits: max questions per request, max labels per question, max state tokens (long prompts blow up attention cost). Return 422 when exceeded.
-- [ ] Verify the official TypeSafe Python SDK works against it unmodified by pointing its base URL at jeff (`sdk/python/api/constants.md` lists the env var).
+- [x] FastAPI app: `POST /v1/systemone`, `GET /v1/models`, `GET /healthz`.
+- [x] Bearer auth via `JEFF_API_KEYS` env (comma-separated); missing/invalid -> 401 jev-style error body.
+- [x] Error parity: 401 / 422 / 429 (token-bucket per key) / 529 (queue full).
+- [x] Request queue + **dynamic batcher**: coalesce requests for up to N ms or B items, one backend call. Configurable `JEFF_MAX_BATCH`, `JEFF_MAX_WAIT_MS`.
+- [x] Backend selected by env: `JEFF_BACKEND=torch|onnx`, `JEFF_MODEL=...`, `JEFF_DEVICE=cuda|mps|cpu`.
+- [x] Limits: max questions per request, max labels per question, max state tokens (long prompts blow up attention cost). Return 422 when exceeded.
+- [x] Verify the official TypeSafe Python SDK works against it unmodified by pointing its base URL at jeff (`sdk/python/api/constants.md` lists the env var). **Done: `typesafe-sdk` 0.7.0 round-trips via `TYPESAFE_BASE_URL`, incl. 401/422 exception mapping and `models.list()`. Wire schema copied from `typesafe_sdk/_schemas/models.py` (instructions optional, noul criteria `{true,false}`, 422 body is FastAPI `{detail:[...]}`, `x-typesafe-request-id` + `retry-after-ms` headers).**
 
 ## 3. GPU arm (`jeff/backends/torch_backend.py`, `deploy/modal_gpu.py`)
 
@@ -67,6 +67,9 @@ Pure functions, no server, no device assumptions. Fully unit-tested.
 - [ ] Stretch: Rust server with `ort` crate if ORT-in-Python overhead dominates at small batch. Only if measurements justify it.
 
 ## 5. Evaluation & benchmarks (`bench/`)
+
+- [ ] **First: noul context sensitivity.** Large model, single-label noul "Does the customer request a refund?" on a text that clearly does:
+  flat text alone 0.95; + team group 0.52; + team + frustration 0.88; same three with noul last 0.23; dict-style state (`subject: ...\nmessage: ...`) alone 0.02. Choice/score groups looked stable in the same runs. Test fixes: (a) `PromptOptions.isolate_questions` = one prompt per question (N encoder passes, batched); (b) `yes_no` mode; (c) state rendering variants for objects (JSON vs `key: value` vs values only). Pick per-type defaults from data.
 
 - [ ] Small labeled eval set (~200 items) covering the three primitives: sentiment/topic choice, severity/frustration score, yes/no nouls. Source from public classification datasets + hand-written jev-style questions.
 - [ ] Accuracy: choice accuracy, score MAE vs ordinal label, noul AUROC. Compare label-string variants (bare key vs `key: description`; group name = id vs instruction).
@@ -93,4 +96,5 @@ Pure functions, no server, no device assumptions. Fully unit-tested.
 ## Progress log
 
 - 2026-09-18: Research done (model card, repo source, jev docs). Plan written.
+- 2026-09-18: §2 done: `jeff.server` (FastAPI, auth, 401/422/429/529, dynamic batcher, limits, `/v1/models`, `/stats`), `uv run jeff` entry point. 24 tests green incl. official SDK live test. Live large model on M2 Max MPS: 148 ms/req sequential (3 questions), 31.9 req/s at 64 concurrent (avg batch 4.5). Severity docs example: ours 0.02/0.81/0.17 vs jev 0/0.7/0.3. Found noul context sensitivity (logged under §5).
 - 2026-09-18: §0 done. §1 done: `jeff.core` (schemas, state, groups, answers, engine, backend protocol) + `jeff.backends.torch_backend` (reference arm; replicates `GLiFormer.inference` so per-group descriptions and prompt token counts are available). 15 tests green incl. integration on base checkpoint. Found: `threshold=0.0` is treated as unset by the library decoder, use `-1.0` to get all labels.

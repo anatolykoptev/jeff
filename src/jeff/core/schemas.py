@@ -1,107 +1,100 @@
-"""Pydantic models for the jev-compatible request and response bodies.
+"""Pydantic models for the jev-compatible wire format.
 
-Mirrors https://docs.typesafe.ai/api. Field names are kept identical so the
-official TypeSafe SDKs can talk to this server unmodified.
+Mirrors the OpenAPI schema that ships inside ``typesafe-sdk`` (see
+``typesafe_sdk/_schemas/models.py``) so the official SDKs can talk to this
+server unmodified. Extra fields are tolerated on input, as the real API does.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .state import serialize_state
 
 State = Union[str, dict[str, Any], list[Any]]
+JSONish = Union[str, dict[str, Any], list[Any]]
+
+
+def _text(v: Any) -> str | None:
+    """Render a str | dict | list value to prompt text; None stays None."""
+    if v is None:
+        return None
+    return serialize_state(v)
 
 
 class _Question(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    instructions: str | dict[str, Any] | list[Any]
+    instructions: JSONish | None = None
 
-    def instructions_text(self) -> str:
-        from .state import serialize_state
+    def instructions_text(self) -> str | None:
+        return _text(self.instructions)
 
-        return serialize_state(self.instructions)
+
+class NoulCriteria(BaseModel):
+    true: JSONish | None = None
+    false: JSONish | None = None
 
 
 class NoulQuestion(_Question):
     type: Literal["noul"]
-    criteria: dict[str, Any] | str | None = None
+    criteria: NoulCriteria | None = None
 
-    def criterion(self, key: str) -> str | None:
-        """Description for the ``true`` / ``false`` side, if given."""
-        if isinstance(self.criteria, dict):
-            v = self.criteria.get(key)
-            return None if v is None else str(v)
-        return None
+    def criterion(self, side: str) -> str | None:
+        if self.criteria is None:
+            return None
+        return _text(getattr(self.criteria, side))
 
 
 class ChoiceQuestion(_Question):
     type: Literal["choice"]
-    # jev documents a mapping option -> description. A bare list of option
-    # names is accepted too (descriptions empty).
-    criteria: dict[str, Any] | list[str]
+    # Wire schema: option name -> description (any JSON) or null.
+    criteria: dict[str, JSONish | None]
 
     @field_validator("criteria")
     @classmethod
-    def _non_empty(cls, v):
-        if len(v) < 2:
-            raise ValueError("choice needs at least two options")
-        if isinstance(v, list) and len(set(v)) != len(v):
-            raise ValueError("choice options must be unique")
+    def _at_least_one(cls, v):
+        if len(v) < 1:
+            raise ValueError("choice needs at least one option")
         return v
 
     def options(self) -> list[tuple[str, str | None]]:
-        if isinstance(self.criteria, list):
-            return [(k, None) for k in self.criteria]
-        return [(k, None if v is None else str(v) if not isinstance(v, (dict, list)) else _json(v)) for k, v in self.criteria.items()]
-
-
-class ScoreLevel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    what: str
-    examples: list[str] | None = None
+        return [(k, _text(d)) for k, d in self.criteria.items()]
 
 
 class ScoreQuestion(_Question):
     type: Literal["score"]
-    criteria: list[str] | list[ScoreLevel]
-
-    @field_validator("criteria")
-    @classmethod
-    def _at_least_two(cls, v):
-        if len(v) < 2:
-            raise ValueError("score needs at least two levels")
-        return v
+    criteria: list[JSONish] = Field(min_length=1)
 
     def levels(self) -> list[tuple[str, list[str] | None]]:
+        """(label text, examples) per level.
+
+        ``{"what": ..., "examples": [...]}`` is the documented object form;
+        any other dict/list is rendered as text.
+        """
         out = []
         for lv in self.criteria:
-            if isinstance(lv, str):
-                out.append((lv, None))
+            if isinstance(lv, dict) and "what" in lv:
+                ex = lv.get("examples")
+                out.append((serialize_state(lv["what"]), [str(e) for e in ex] if isinstance(ex, list) else None))
             else:
-                out.append((lv.what, lv.examples))
+                out.append((serialize_state(lv), None))
         return out
 
-    def legend(self) -> dict[str, Any]:
-        """Mirror the criteria back by level number, as jev does."""
-        return {
-            str(i): (lv if isinstance(lv, str) else lv.model_dump(exclude_none=True))
-            for i, lv in enumerate(self.criteria)
-        }
+    def legend(self) -> dict[str, JSONish]:
+        return {str(i): lv for i, lv in enumerate(self.criteria)}
 
 
-Question = Annotated[
-    Union[NoulQuestion, ChoiceQuestion, ScoreQuestion], Field(discriminator="type")
-]
+Question = Annotated[Union[NoulQuestion, ChoiceQuestion, ScoreQuestion], Field(discriminator="type")]
 
 
 class SystemOneRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
     state: State
     model: str | None = None
-    # Seen in the score docs example; treated as an alias of ``model``.
+    # Not in the wire schema but appears in one docs example; alias of model.
     selectedModels: list[str] | None = None
-    questions: dict[str, Question]
+    questions: dict[str, Question] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _resolve_model(self):
@@ -110,8 +103,6 @@ class SystemOneRequest(BaseModel):
                 self.model = self.selectedModels[0]
             else:
                 raise ValueError("model is required")
-        if not self.questions:
-            raise ValueError("questions must not be empty")
         return self
 
 
@@ -136,7 +127,7 @@ class ScoreAnswer(BaseModel):
     type: Literal["score"] = "score"
     score: float
     confidence: float
-    legend: dict[str, Any]
+    legend: dict[str, JSONish]
     probabilities: dict[str, float]
 
 
@@ -149,13 +140,11 @@ class SystemOneResponse(BaseModel):
     usage: Usage
 
 
-class ErrorBody(BaseModel):
-    """jev returns ``{"error": {"type": ..., "message": ...}}`` style bodies."""
+class ModelMetadata(BaseModel):
+    name: str
+    description: str
+    release_date: str
 
-    error: dict[str, Any]
 
-
-def _json(v: Any) -> str:
-    import json
-
-    return json.dumps(v, ensure_ascii=False)
+class ModelMetadataList(BaseModel):
+    models: list[ModelMetadata]

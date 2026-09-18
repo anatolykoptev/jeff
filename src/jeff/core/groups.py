@@ -38,17 +38,17 @@ def build_groups(questions: dict[str, Question], opts: PromptOptions = PromptOpt
 
 
 def _group_for(qid: str, q: Question, opts: PromptOptions) -> Group:
-    name = q.instructions_text() if opts.instruction_as_name else qid
+    instr = q.instructions_text()
+    name = (instr or qid) if opts.instruction_as_name else qid
     if isinstance(q, NoulQuestion):
-        desc = q.criteria if isinstance(q.criteria, str) else None
         if opts.noul_mode == "single":
-            label = _fold(q.instructions_text(), q.criterion("true"), opts)
-            return Group(key=qid, labels=(label,), name=None, description=desc)
+            label = _fold(instr or qid, q.criterion("true"), opts)
+            return Group(key=qid, labels=(label,), name=None)
         labels = (
             _fold(NOUL_YES, q.criterion("true"), opts),
             _fold(NOUL_NO, q.criterion("false"), opts),
         )
-        return Group(key=qid, labels=labels, name=name, description=desc)
+        return Group(key=qid, labels=labels, name=name)
     if isinstance(q, ChoiceQuestion):
         labels = tuple(_fold(k, d, opts) for k, d in q.options())
         return Group(key=qid, labels=_dedupe(labels), name=name)

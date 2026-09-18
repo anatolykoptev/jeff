@@ -36,8 +36,16 @@ def test_request_validation():
         SystemOneRequest.model_validate({"state": "x", "questions": {"q": {"type": "noul", "instructions": "?"}}})
     with pytest.raises(ValidationError):
         SystemOneRequest.model_validate(
-            {"state": "x", "model": "m", "questions": {"q": {"type": "choice", "instructions": "?", "criteria": {"only": "one"}}}}
+            {"state": "x", "model": "m", "questions": {"q": {"type": "choice", "instructions": "?", "criteria": {}}}}
         )
+    with pytest.raises(ValidationError):
+        SystemOneRequest.model_validate(
+            {"state": "x", "model": "m", "questions": {"q": {"type": "score", "instructions": "?", "criteria": []}}}
+        )
+    # instructions are optional on the wire; the question id stands in
+    r = SystemOneRequest.model_validate({"state": "x", "model": "m", "questions": {"spam": {"type": "noul"}}})
+    (g,) = build_groups(r.questions)
+    assert g.labels == ("spam",)
     with pytest.raises(ValidationError):
         SystemOneRequest.model_validate(
             {"state": "x", "model": "m", "questions": {"q": {"type": "banana", "instructions": "?"}}}
