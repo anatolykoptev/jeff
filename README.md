@@ -1,205 +1,210 @@
 # jeff
 
-A self-hosted, wire-compatible implementation of TypeSafe's [jev](https://docs.typesafe.ai/api)
-System One API (`POST /v1/systemone`), served by
-[GLiFormer](https://huggingface.co/knowledgator/gliformer-large-v1), a 400M-parameter
-zero-shot classifier. The official `typesafe-sdk` works against it unmodified: point
-`TYPESAFE_BASE_URL` at jeff.
+A self-hosted implementation of TypeSafe's [jev System One API](https://docs.typesafe.ai/api),
+powered by [GLiFormer](https://huggingface.co/knowledgator/gliformer-large-v1) (400M parameters).
+Use the official `typesafe-sdk` by pointing `TYPESAFE_BASE_URL` at jeff.
 
-jev's three primitives map onto GLiFormer classification groups:
+Supports `choice` (pick an option), `score` (rate on ordered levels), and `noul` (probability of yes).
+Cheaper to self-host, but less accurate than jev on reasoning-heavy tasks. See [benchmarks](#benchmarks).
 
-| jev question | GLiFormer group | answer |
-|---|---|---|
-| `choice` (pick one of N options) | one label per option, `key: description` | renormalized probabilities, argmax, confidence |
-| `score` (rate on ordered levels) | one label per level, in order | expected level under the raw distribution, per-level probabilities |
-| `noul` (yes/no) | `yes` / `no` labels under the question, own encoder pass | P(yes) |
-
-All questions in a request share one encoder pass over the text, except nouls, which get their
-own (other questions' tokens otherwise shift a noul's answer by up to 0.98; measured in
-`bench/RESULTS.md`). Probabilities are temperature-scaled with T = 3.2, fit on eight public
-datasets, so they are roughly calibrated; `score` stays the expected level of the raw
-distribution because that had the lower error.
-
-**Accuracy and cost vs jev** (1,600 labeled items, `bench/RESULTS.md`): jev is more accurate on
-every task except binary sentiment, with the largest gaps on questions that need inference
-(BoolQ 0.75 vs 0.95 AUROC, irony 0.71 vs 0.96) and topic choice (AG News 76% vs 90%). jeff
-answers in about the same wall-clock time from a laptop (151 vs 129 ms sequential) and costs
-roughly 6x less per request on an L4 behind Modal's web ingress, or 25x less when the GPU is
-called directly. Use it where cost, data residency or self-hosting matter more than accuracy on
-questions that need inference over the text.
+[Quickstart](#quickstart) · [Deploy](#deploy-on-modal) · [Configuration](#configuration) · [API](#api-and-compatibility) · [Development](#development)
 
 ## Quickstart
 
-```sh
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12. Run from the repository root:
+
+```bash
 uv sync --extra dev
 uv run hf download knowledgator/gliformer-large-v1 --local-dir models/gliformer-large-v1
-JEFF_API_KEYS=devkey uv run jeff            # http://localhost:8000, cuda > mps > cpu
+JEFF_API_KEYS=devkey uv run jeff
 ```
 
-Then use the official SDK unchanged:
+Serves at `http://localhost:8000`. Device selection: CUDA → MPS → CPU.
 
-```sh
-pip install typesafe-sdk
-TYPESAFE_API_KEY=devkey TYPESAFE_BASE_URL=http://localhost:8000 python -c '
-from typesafe_sdk import TypeSafeClient, Noul, Choice, Score
-c = TypeSafeClient()
-r = c.system_one("I was charged twice. Please help ASAP.", {
-    "billing": Noul(instructions="Is this about billing?"),
-    "tone": Choice(instructions="What is the tone?", criteria={"calm": None, "angry": "hostile"}),
-    "urgency": Score(instructions="How urgent is this?", criteria=["low", "medium", "high"]),
-})
-print(r.nouls["billing"].noul, r.choices["tone"].choice, r.scores["urgency"].score)'
+The sync above also installs `typesafe-sdk`. Save this as `example.py`:
+
+```python
+from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+
+client = TypeSafeClient(api_key="devkey", base_url="http://localhost:8000")
+result = client.system_one(
+    "I was charged twice. Please help ASAP.",
+    {
+        "billing": Noul(instructions="Is this about billing?"),
+        "tone": Choice(
+            instructions="What is the tone?",
+            criteria={"calm": None, "angry": "hostile"},
+        ),
+        "urgency": Score(
+            instructions="How urgent is this?", criteria=["low", "medium", "high"]
+        ),
+    },
+)
+print(result.nouls["billing"].noul)
+print(result.choices["tone"].choice)
+print(result.scores["urgency"].score)
 ```
 
-Or curl:
+In another terminal:
 
-```sh
-curl localhost:8000/v1/systemone -H "Authorization: Bearer devkey" -H "Content-Type: application/json" \
-  -d '{"state":"The export button crashes in Safari.","model":"jev-latest","questions":{"sev":{"type":"score","instructions":"How severe?","criteria":["cosmetic","degraded","blocking"]}}}'
+```bash
+uv run python example.py
 ```
 
-Endpoints: `POST /v1/systemone`, `GET /v1/models`, `GET /healthz`, `GET /stats` (batcher
-counters and the active backend/prompt/temperature config). Errors follow jev: 401 (bad key),
-422 (FastAPI-style validation body, also for exceeded limits), 429 (per-key token bucket,
-`retry-after-ms`), 529 (queue full). Every response carries `x-typesafe-request-id`,
-`x-jeff-server-ms` and `x-jeff-batcher-ms`.
+For an existing SDK app, set `TYPESAFE_API_KEY=devkey` and
+`TYPESAFE_BASE_URL=http://localhost:8000` instead of passing client arguments.
 
-For quick local iteration use the base checkpoint (`gliformer-base-v1`, 3x faster) with
-`JEFF_NOUL_MODE=single`; it is not accurate enough for nouls otherwise.
+<details>
+<summary>curl example</summary>
 
-## Deploy on Modal (GPU)
-
-L4 is the recommended GPU for the HTTP API; A10G when you call the backend directly from other
-Modal functions or requests are long (`bench/RESULTS.md` has the data).
-
-```sh
-uv tool install modal && modal setup
-modal run deploy/modal_gpu.py::download                       # weights -> Volume "jeff-models" (once)
-JEFF_GPU=L4 JEFF_API_KEYS=k1 modal deploy deploy/modal_gpu.py  # keeps one warm container
-modal serve deploy/modal_gpu.py                               # ephemeral URL, no warm container
+```bash
+curl http://localhost:8000/v1/systemone \
+  -H 'Authorization: Bearer devkey' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "state": "The export button crashes in Safari.",
+    "model": "jev-latest",
+    "questions": {
+      "severity": {
+        "type": "score",
+        "instructions": "How severe?",
+        "criteria": ["cosmetic", "degraded", "blocking"]
+      }
+    }
+  }'
 ```
 
-Deploy-time env: `JEFF_GPU` (L4), `JEFF_MIN_CONTAINERS` (1 on deploy), `JEFF_MAX_CONTAINERS`
-(8), `JEFF_MAX_INPUTS` (64 concurrent per container), `JEFF_TARGET_INPUTS` (16, autoscale
-threshold), plus any server `JEFF_*` variable, which is forwarded into the container.
+</details>
 
-Modal's web ingress caps one container at roughly 50 requests/s regardless of GPU, so
-throughput scales with containers, not GPU size. For the raw GPU rate (27k tokens/s on L4,
-41k on A10G) call the backend from other Modal functions instead of over HTTP.
+## Deploy on Modal
 
-## CPU arm (ONNX Runtime)
+Use L4 for the HTTP API. These commands download weights once and deploy with one warm container:
 
-For hosts without a GPU. The DeBERTa encoder runs in ONNX Runtime (fp32 or dynamic int8);
-the word-level RNN and classification head stay in torch. Measured on Modal 8-core containers
-the large model takes ~300 ms per request at ~$0.71 per 1M tokens, 17x jev, so it is a
-fallback, not a cheaper tier. On a Mac, MPS is 2-3x faster.
+```bash
+uv run modal setup
+uv run modal run deploy/modal_gpu.py::download
+JEFF_GPU=L4 JEFF_API_KEYS=k1 uv run modal deploy deploy/modal_gpu.py
+```
 
-```sh
+For an ephemeral URL with no warm container:
+
+```bash
+JEFF_API_KEYS=devkey uv run modal serve deploy/modal_gpu.py
+```
+
+Deploy settings: `JEFF_GPU=L4`, `JEFF_MIN_CONTAINERS=1`, `JEFF_MAX_CONTAINERS=8`,
+`JEFF_MAX_INPUTS=64`, `JEFF_TARGET_INPUTS=16`. Server `JEFF_*` variables are forwarded.
+The GPU image defaults to batch size 32, batch wait 10 ms, and warmup enabled.
+
+Measured HTTP throughput caps at ~50 requests/s per container; scale containers for more.
+A10G performs better for direct backend calls and long requests. See [results](bench/RESULTS.md).
+
+<details>
+<summary>CPU / ONNX deployment</summary>
+
+ONNX Runtime runs the encoder; the RNN and classification head stay in PyTorch.
+CPU is a fallback: the measured 8-core Modal deployment was slower and more expensive than jev.
+On Mac, prefer MPS.
+
+```bash
 uv sync --extra onnx
-uv run python scripts/export_onnx.py models/gliformer-large-v1 --int8   # -> models/.../onnx/encoder{,.int8}.onnx
+uv run python scripts/export_onnx.py models/gliformer-large-v1 --int8
 JEFF_BACKEND=onnx JEFF_QUANT=int8 JEFF_THREADS=8 JEFF_API_KEYS=devkey uv run jeff
-
-modal run deploy/modal_cpu.py::export                                   # weights + ONNX -> Volume (once)
-JEFF_CPU=8 JEFF_QUANT=int8 JEFF_API_KEYS=k1 modal deploy deploy/modal_cpu.py
 ```
+
+Or deploy to Modal:
+
+```bash
+uv run modal run deploy/modal_cpu.py::export
+JEFF_CPU=8 JEFF_QUANT=int8 JEFF_API_KEYS=k1 uv run modal deploy deploy/modal_cpu.py
+```
+
+</details>
 
 ## Configuration
 
-All settings are environment variables.
+Set environment variables before starting the server.
 
-| variable | default | meaning |
+| Variable | Default | Purpose |
 |---|---|---|
-| `JEFF_MODEL` | `models/gliformer-large-v1` | local checkpoint path |
-| `JEFF_MODEL_NAME` | `gliformer-large-v1` | name in responses and `GET /v1/models` |
-| `JEFF_MODEL_ALIASES` | `jev-latest,jev` | request `model` values accepted as aliases |
+| `JEFF_API_KEYS` | empty (auth off) | Comma-separated bearer keys |
+| `JEFF_MODEL` | `models/gliformer-large-v1` | Local checkpoint path |
+| `JEFF_DEVICE` | auto | `cuda`, `mps`, or `cpu` |
+| `JEFF_HOST` / `JEFF_PORT` | `0.0.0.0` / `8000` | Listen address |
+| `JEFF_MAX_BATCH` / `JEFF_MAX_WAIT_MS` | `16` / `5` | Batch size / wait in ms |
+| `JEFF_MAX_QUEUE` | `256` | Queued requests before HTTP 529 |
+| `JEFF_RATE_LIMIT_RPS` / `JEFF_RATE_LIMIT_BURST` | `0` (off) / `20` | Per-key rate limit |
+| `JEFF_MAX_QUESTIONS` / `JEFF_MAX_LABELS` / `JEFF_MAX_STATE_CHARS` | `64` / `64` / `20000` | Request limits; exceeded limits return 422 |
+
+<details>
+<summary>Model and backend settings</summary>
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JEFF_MODEL_NAME` | `gliformer-large-v1` | Name in responses and model listing |
+| `JEFF_MODEL_ALIASES` | `jev-latest,jev` | Accepted request model aliases |
 | `JEFF_BACKEND` | `torch` | `torch` or `onnx` |
-| `JEFF_DEVICE` | auto | `cuda`, `mps`, `cpu` |
-| `JEFF_DTYPE` | bf16 on cuda, fp32 elsewhere | |
-| `JEFF_API_KEYS` | empty (auth off) | comma-separated bearer keys |
-| `JEFF_MAX_BATCH` / `JEFF_MAX_WAIT_MS` | 16 / 5 | dynamic batcher: coalesce up to N requests or wait this long |
-| `JEFF_MAX_QUEUE` | 256 | requests waiting before 529 |
-| `JEFF_RATE_LIMIT_RPS` / `JEFF_RATE_LIMIT_BURST` | 0 (off) / 20 | per-key token bucket |
-| `JEFF_MAX_QUESTIONS` / `JEFF_MAX_LABELS` / `JEFF_MAX_STATE_CHARS` | 64 / 64 / 20000 | request limits, 422 when exceeded |
-| `JEFF_TEMPERATURE` | 3.2 | temperature on `probabilities`, `confidence`, `noul`; 1.0 = raw renormalized sigmoids |
-| `JEFF_ISOLATE` | `nouls` | which questions get their own encoder pass: `none`, `nouls`, `all` |
-| `JEFF_NOUL_MODE` | `yes_no` | noul rendering: `yes_no`, `single`, `single_named` |
-| `JEFF_STATE_FORMAT` | `kv` | how object/array `state` is rendered: `kv`, `json`, `values` |
-| `JEFF_ATTN` | `auto` | `flash` (flashdeberta Triton kernels, CUDA) or `eager` |
-| `JEFF_COMPILE` / `JEFF_COMPILE_MODE` / `JEFF_PAD_MULTIPLE` | 0 / unset / 0 | torch.compile options; off because compile is slower than the flash kernels |
-| `JEFF_WARMUP` | 0 | run warmup shapes at startup (on in the Modal image) |
-| `JEFF_QUANT` / `JEFF_THREADS` / `JEFF_ONNX_PATH` | fp32 / auto / auto | CPU arm |
-| `JEFF_HOST` / `JEFF_PORT` | 0.0.0.0 / 8000 | |
+| `JEFF_DTYPE` | bf16 on CUDA, fp32 elsewhere | Model precision |
+| `JEFF_TEMPERATURE` | `3.2` | Probability calibration; `1` disables scaling |
+| `JEFF_ISOLATE` | `nouls` | Separate encoder passes: `none`, `nouls`, `all` |
+| `JEFF_NOUL_MODE` | `yes_no` | `yes_no`, `single`, `single_named` |
+| `JEFF_STATE_FORMAT` | `kv` | Object/array rendering: `kv`, `json`, `values` |
+| `JEFF_ATTN` | `auto` | `auto`, `flash` (CUDA), or `eager` |
+| `JEFF_COMPILE` / `JEFF_COMPILE_MODE` / `JEFF_PAD_MULTIPLE` | `0` / unset / `0` | Compilation and padding options |
+| `JEFF_WARMUP` | `0` | Warmup at startup |
+| `JEFF_QUANT` / `JEFF_THREADS` / `JEFF_ONNX_PATH` | `fp32` / auto / auto | ONNX precision, thread count, encoder path |
+
+For faster local iteration, download `knowledgator/gliformer-base-v1`, set `JEFF_MODEL`
+to its path, and use `JEFF_NOUL_MODE=single` for usable noul results.
+
+</details>
+
+## API and compatibility
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/systemone` | Answer classification questions |
+| `GET /v1/models` | List models and aliases |
+| `GET /healthz` | Health check |
+| `GET /stats` | Batcher counters and active configuration |
+
+Errors: **401** invalid key, **422** validation or request limit, **429** rate limit
+(`retry-after-ms`), **529** full queue. Responses include `x-typesafe-request-id`,
+`x-jeff-server-ms`, and `x-jeff-batcher-ms`.
+
+The wire format works with the official SDK; model behavior differs:
+
+- **Probabilities:** normalized sigmoids, temperature-scaled at 3.2. `score` uses the raw
+  distribution, so it only matches the weighted average of displayed probabilities at
+  `JEFF_TEMPERATURE=1`. Confidence uses `(p_max - 1/n) / (1 - 1/n)`.
+- **Question independence:** nouls get separate encoder passes; choice and score questions
+  share a pass and can affect each other. Set `JEFF_ISOLATE=all` for independence at extra cost.
+- **Tokens:** `usage.input_tokens` counts DeBERTa prompt + text tokens; `output_tokens` is nominal.
+  Counts are not comparable to jev billing.
 
 ## Benchmarks
 
-Everything below is from `bench/RESULTS.md`, which has the full tables and how to regenerate them.
+Measured on 1,600 labeled items across eight datasets:
 
-**Accuracy** on 200 label-balanced items per dataset, one question each, same requests to both
-APIs (`bench/eval_accuracy.py`):
+| Comparison | jeff | jev |
+|---|---:|---:|
+| Sequential p50 latency from a laptop | 151 ms (L4 / Modal HTTP) | 129 ms |
+| Cost per 1M single-question requests | ~$2.6 (L4 / Modal HTTP) | ~$15.6 |
+| AG News topic accuracy | 75.5% | 90.5% |
 
-| task | metric | jeff (gliformer-large) | jev-latest |
-|---|---|---:|---:|
-| AG News (4 topics) | accuracy | 0.755 | 0.905 |
-| Emotion (6 classes) | accuracy | 0.470 | 0.470 |
-| SST-5 (5 levels) | MAE | 0.611 | 0.489 |
-| Amazon stars (5 levels) | MAE | 0.600 | 0.467 |
-| SMS spam | AUROC | 0.918 | 0.994 |
-| SST-2 positive? | AUROC | 0.991 | 0.996 |
-| Tweet irony | AUROC | 0.714 | 0.958 |
-| BoolQ (passage + question) | AUROC | 0.749 | 0.954 |
-
-**Latency** from a laptop, p50: jev 129 ms, jeff on an L4 via Modal 151 ms (sequential);
-131 vs 267 ms at 8 concurrent clients, where one Modal container's ingress serializes. The
-model itself takes 28 ms (A10G) to 45 ms (L4) per request at batch 1, 120k tokens/s on H100.
-
-**Cost per 1M single-question requests** (86 jeff tokens / 372 jev tokens each): jev ≈ $15.6;
-jeff on L4 at the ingress cap ≈ $2.6; jeff on A10G called directly ≈ $0.65.
-
-## Parity with jev: known differences
-
-Wire format, SDK behaviour and error codes match (`tests/test_sdk_live.py` drives the official
-SDK against a live server). The model behind the API differs:
-
-- **Accuracy.** See the table above. jeff classifies from lexical cues; it is close to jev on
-  sentiment and spam and well behind on anything that needs inference over the text.
-- **Probabilities.** jeff's are renormalized independent sigmoids, temperature-scaled by 3.2.
-  With that, calibration error is within 0.03-0.06 of jev's on most tasks. Because `score` is
-  computed from the untempered distribution, `score` is not exactly the probability-weighted
-  average of the shown `probabilities` (set `JEFF_TEMPERATURE=1` if you need that identity).
-  `confidence` is `(p_max - 1/n)/(1 - 1/n)`; jev does not publish its formula.
-- **Descriptions.** Option and noul criteria descriptions are folded into label text
-  (`key: description`). Required for nouls; neutral for choice. The instruction text is the
-  group name; question ids never reach the model.
-- **Context effects.** jev answers each question independently of the others in the request
-  (measured: identical metrics with three unrelated questions added). jeff isolates nouls, so
-  they are independent too; choice and score questions share one encoder pass and lose about
-  1.5 points of accuracy / 0.03 MAE with three unrelated questions in front. `JEFF_ISOLATE=all`
-  makes every question independent for roughly 50% more tokens and 20% more latency.
-- **Token accounting.** `usage.input_tokens` is the DeBERTa token count of prompt + text, about
-  4.3x fewer than jev bills for the same request. `output_tokens` is nominal.
-- **Limits.** Question, label and state-size limits above return 422; jev's limits are
-  undocumented. Encoder cost is quadratic in state length, and every isolated noul is one more
-  encoder pass.
+jeff is close on binary sentiment, tied on emotion classification, and substantially behind
+on irony and reading comprehension. Costs depend on workload and utilization.
+[Full results, methodology, and reproduction commands →](bench/RESULTS.md)
 
 ## Development
 
-```sh
-uv run pytest -q                                   # 30 tests; base checkpoint needed for the integration ones
+```bash
+uv sync --extra dev
+uv run pytest -q
 ```
 
-Layout: `src/jeff/core` (schemas, state rendering, prompt groups, decoder, engine; pure
-functions), `src/jeff/backends` (torch and ONNX backends), `src/jeff/server` (FastAPI app,
-batcher, settings), `deploy/` (Modal GPU and CPU apps), `bench/` (eval set builder and runner,
-calibration fit, load generator, noul probe, results).
+Model integration tests need `models/gliformer-base-v1`; they skip if it is absent.
+The [SDK tests](tests/test_sdk_live.py) use a live server with a fake backend.
 
-Bench scripts:
-
-```sh
-uv run --group bench python bench/build_evalset.py                 # resample bench/data from HF datasets
-uv run python bench/eval_accuracy.py jeff --variants default nodesc # in-process, prompt variants
-uv run python bench/eval_accuracy.py jev -c 8                      # real jev; TYPESAFE_API_KEY from .env
-uv run python bench/eval_accuracy.py http --url URL --key K --name jeff-l4
-uv run python bench/eval_accuracy.py summarize --full              # markdown tables
-uv run python bench/calibrate.py --run large/default               # temperature fit
-uv run python bench/load.py --url URL --key K -c 1 8 32 -n 200     # HTTP load test
-```
+Code: [core](src/jeff/core/) · [backends](src/jeff/backends/) · [server](src/jeff/server/) ·
+[deploy](deploy/) · [bench](bench/)
