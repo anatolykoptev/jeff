@@ -1,8 +1,4 @@
-"""FastAPI app exposing the jev API surface.
-
-Endpoints:  POST /v1/systemone   GET /v1/models   GET /healthz   GET /stats
-Errors:     401 / 422 / 429 / 529 with the bodies and headers the TypeSafe SDK parses.
-"""
+"""FastAPI routes and errors compatible with the TypeSafe SDK."""
 
 from __future__ import annotations
 
@@ -92,8 +88,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
 
     @app.exception_handler(RequestValidationError)
     async def _on_validation(request: Request, exc: RequestValidationError):
-        # Same shape FastAPI emits by default (and the SDK expects); drop
-        # non-serializable ctx objects.
+        # Preserve the SDK's expected validation shape without non-serializable ctx objects.
         detail = []
         for e in exc.errors():
             d = {k: v for k, v in e.items() if k in ("loc", "msg", "type", "input")}
@@ -112,7 +107,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         return key
 
     @app.get("/healthz")
-    @app.post("/healthz")  # POST accepted so load tools can measure ingress overhead without the model
+    @app.post("/healthz")  # POST lets load tests measure ingress without inference
     async def healthz():
         return {"ok": True, "model": cfg.model_name}
 
@@ -182,8 +177,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             return _error(
                 529, "overloaded_error", "Server is overloaded, retry with backoff", {"retry-after-ms": "500"}
             )
-        # Server-side time from parsed request to answer, so client-observed
-        # latency can be split into network/ingress vs jeff.
+        # Queue wait + inference, excluding request validation and network overhead.
         request.state.server_ms = round(1000 * (time.perf_counter() - t0), 1)
         return resp
 

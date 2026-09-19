@@ -1,15 +1,9 @@
-"""Noul context sensitivity probe.
+"""Measure noul sensitivity to neighboring questions and string/object state.
 
-A noul's answer should not depend on which other questions are in the same
-request or on whether ``state`` was a string or an object. This measures how far each
-prompt-rendering variant is from that ideal and picks defaults from data.
-
-Usage:
     uv run python bench/noul_probe.py --model models/gliformer-large-v1
     uv run python bench/noul_probe.py --model models/gliformer-base-v1 --tag base
 
-Writes one line per (variant, context, case) to bench/results/noul_probe.jsonl
-and prints a summary table per variant.
+Write per-variant/context/case results to bench/results/noul_probe.jsonl and print summaries.
 """
 
 from __future__ import annotations

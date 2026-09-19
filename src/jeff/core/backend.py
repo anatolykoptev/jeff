@@ -1,4 +1,4 @@
-"""Backend protocol shared by the GPU (torch) and CPU (onnx) arms."""
+"""Shared scoring protocol for PyTorch and ONNX backends."""
 
 from __future__ import annotations
 
@@ -8,12 +8,7 @@ from typing import Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class Group:
-    """One GLiFormer classification group.
-
-    ``name`` and ``description`` both appear in the prompt as free text
-    (``[SCHEMA] name description [CLASS] label ... [SEP]``), so they are where
-    the jev ``instructions`` text goes.
-    """
+    """Classification group; name and description carry instructions into the prompt."""
 
     key: str
     labels: tuple[str, ...]

@@ -1,8 +1,4 @@
-"""Serialize jev ``state`` (string | object | array) into plain text.
-
-GLiFormer is text-only, as is jev. The format is simple and stable: objects become ``key: value`` lines, arrays become one item per line,
-nested containers are rendered as compact JSON.
-"""
+"""Render state as text: key/value lines for objects, item lines for arrays, JSON for nested values."""
 
 from __future__ import annotations
 

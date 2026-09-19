@@ -1,19 +1,7 @@
-"""GPU / reference arm: GLiFormer via PyTorch.
+"""GLiFormer inference on CUDA, MPS, or CPU.
 
-Runs on cuda (bf16 + flashdeberta Triton kernels), mps, or cpu (eager
-attention). This replicates ``GLiFormer.inference`` closely enough to inject a
-per-group ``description`` (the public ``classify()`` only accepts names +
-labels) and to record prompt token counts for ``usage``.
-
-GPU options (all optional, see ``from_env``):
-
-* ``attn_kernel``: ``auto`` (flash on cuda, eager elsewhere), ``flash``, ``eager``.
-* ``compile_model``: ``torch.compile`` the DeBERTa text encoder in place. The
-  classification head is left eager (data-dependent gather/scatter).
-* ``pad_multiple``: pad every batch's sequence length up to a multiple of N so
-  compiled graphs see a few shapes instead of one per request.
-* ``warmup``: run the bucketed shapes once at load so the first real request
-  does not pay for compilation.
+Uses the internal inference path to pass group descriptions and count prompt tokens.
+Only the encoder is compiled; the classification head has data-dependent shapes.
 """
 
 from __future__ import annotations
@@ -31,8 +19,7 @@ from ..core.backend import Group, ScoredText
 
 log = logging.getLogger("jeff.torch")
 
-# ``threshold or self.threshold`` inside the decoder treats 0.0 as unset, so a
-# negative threshold is the reliable way to get every label back.
+# The decoder treats 0.0 as unset; a negative threshold returns every label.
 ALL_LABELS_THRESHOLD = -1.0
 
 ATTN_KERNELS = ("auto", "flash", "eager")
@@ -145,8 +132,7 @@ class TorchBackend:
         owner, attr = found
         if self.attn_kernel == "flash":
             _exclude_flash_kernels_from_compile()
-        # Batch size and sequence length both vary; dynamic=None lets dynamo
-        # mark them dynamic after the first recompile.
+        # dynamic=None lets Dynamo generalize varying batch/sequence sizes after recompilation.
         self._uncompiled = (owner, attr, getattr(owner, attr))
         setattr(owner, attr, torch.compile(getattr(owner, attr), mode=mode, dynamic=None))
         self.compiled = True
@@ -233,12 +219,7 @@ class TorchBackend:
 
 
 class _BucketingTokenizer:
-    """Tokenizer proxy that pads ``padding="longest"`` calls up to a multiple of N.
-
-    gliformer's processor calls the tokenizer with ``padding="longest"`` and a
-    ``max_length`` truncation budget; HF refuses ``pad_to_multiple_of`` unless
-    that budget is itself a multiple, so it is rounded down here.
-    """
+    """Pad to a multiple of N; align max_length too, as Hugging Face requires."""
 
     def __init__(self, tokenizer, multiple: int):
         object.__setattr__(self, "_tok", tokenizer)
@@ -269,11 +250,7 @@ def _set_attn_kernel(root: torch.nn.Module, kernel: str):
 
 
 def _exclude_flash_kernels_from_compile():
-    """Keep dynamo from tracing into the flashdeberta Triton launches.
-
-    Inductor cannot rebuild the disentangled attention kernel; a graph break
-    around the already-fused kernels costs little.
-    """
+    """Skip tracing fused Triton kernels that Inductor cannot rebuild."""
     try:
         import gliformer.backbones.deberta_2d as d2
     except ImportError:  # pragma: no cover

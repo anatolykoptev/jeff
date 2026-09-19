@@ -1,22 +1,13 @@
-"""Accuracy, calibration and latency eval on bench/data/*.jsonl.
+"""Evaluate bench/data/*.jsonl in-process or over a jev-compatible API.
 
-Run the same labeled requests through jeff (in-process, so prompt-rendering
-variants can be compared without a server), through any jev-compatible HTTP
-endpoint (a local `uv run jeff`, `modal serve deploy/modal_gpu.py`), and
-through the real jev at api.typesafe.ai. Then summarize.
-
-    # jeff in-process, default prompt options + label-string variants
-    uv run python bench/eval_accuracy.py jeff --model models/gliformer-large-v1 --variants default nodesc idname
-    # real jev (reads TYPESAFE_API_KEY from .env / env)
+    uv run python bench/eval_accuracy.py jeff --model models/gliformer-large-v1 --variants default nodesc
     uv run python bench/eval_accuracy.py jev -c 8
-    # any HTTP endpoint (latency comparable with jev when it runs on Modal)
     uv run python bench/eval_accuracy.py http --url https://...modal.run --key k1 --name jeff-l4 -c 8
-    # tables (also prints cross-system agreement with jev when both exist)
     uv run python bench/eval_accuracy.py summarize
 
-Every item is one request with one question, so per-request latency is the
-per-question latency and `usage.input_tokens` is comparable across systems.
-Rows go to bench/results/accuracy.jsonl (one per item; `run` distinguishes systems).
+jev reads TYPESAFE_API_KEY from the environment or .env. Results append to
+bench/results/accuracy.jsonl. In-process latency is amortized batch time; HTTP
+latency is per request. Token counts use each backend's tokenizer.
 """
 
 from __future__ import annotations
@@ -50,9 +41,7 @@ VARIANTS: dict[str, dict[str, Any]] = {
     "json": {"state_format": "json"},
 }
 
-# --multi: the labeled question is placed last in a request with these three unrelated
-# questions (the worst case in bench/noul_probe.py), so its metrics can be compared with
-# the single-question run of the same items.
+# --multi puts these before the labeled question to measure context effects (see noul_probe.py).
 DISTRACTORS = {
     "team": {
         "type": "choice",
@@ -221,7 +210,7 @@ def auroc(scores: list[float], labels: list[bool]) -> float:
     neg = [s for s, y in zip(scores, labels) if not y]
     if not pos or not neg:
         return float("nan")
-    # rank-sum with ties counted as half
+    # Pairwise ranking; ties count as half a win.
     wins = 0.0
     for p in pos:
         for n in neg:
@@ -393,7 +382,6 @@ def summarize(args):
                 print(f"| {t} | {run} | " + " | ".join(fmt(m.get(c, float("nan"))) for c in cols) + " |")
         print()
 
-    # Mean over tasks per run, for a one-line comparison.
     print("## Averages over tasks\n")
     print("| run | choice acc | score mae | noul auroc | noul acc | p50 ms | tokens |")
     print("|---|---:|---:|---:|---:|---:|---:|")
@@ -433,7 +421,6 @@ def summarize(args):
         )
     print()
 
-    # Agreement with jev, item by item.
     counts = defaultdict(int)
     for r in rows:
         counts[r["run"]] += 1

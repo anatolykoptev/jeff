@@ -1,11 +1,6 @@
-"""CPU arm: GLiFormer with the DeBERTa encoder running in ONNX Runtime.
+"""Run the encoder in ONNX Runtime; reuse PyTorch preprocessing, RNN, and head on CPU.
 
-Everything except the encoder (prompt/word splitting, word-level RNN,
-classification head) is the torch reference path from ``TorchBackend``, run in
-fp32 on CPU. The encoder is more than 90% of the compute, so int8 and ORT's
-graph optimizations apply there, and the group layout logic is unchanged.
-
-Export the encoder first: ``uv run python scripts/export_onnx.py <model> [--int8]``.
+Export with scripts/export_onnx.py, or let OnnxBackend export missing files.
 """
 
 from __future__ import annotations

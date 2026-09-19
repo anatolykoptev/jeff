@@ -15,8 +15,7 @@ def _env_list(name: str) -> list[str]:
 class Settings:
     backend: str = os.environ.get("JEFF_BACKEND", "torch")
     model_path: str = os.environ.get("JEFF_MODEL", "models/gliformer-large-v1")
-    # Name reported in responses and GET /v1/models. "jev-latest" is also
-    # accepted as an alias in requests so SDK defaults work.
+    # Aliases preserve the SDK's default model name.
     model_name: str = os.environ.get("JEFF_MODEL_NAME", "gliformer-large-v1")
     model_aliases: list[str] = field(default_factory=lambda: _env_list("JEFF_MODEL_ALIASES") or ["jev-latest", "jev"])
     device: str | None = os.environ.get("JEFF_DEVICE")
@@ -56,8 +55,7 @@ class Settings:
     )  # single | single_named | yes_no (base checkpoint: single)
     isolate: str = os.environ.get("JEFF_ISOLATE", "nouls")  # none | nouls | all
     state_format: str = os.environ.get("JEFF_STATE_FORMAT", "kv")  # kv | json | values
-    # Temperature for probabilities/confidence/noul (jeff.core.answers). 1.0 = raw
-    # renormalized sigmoids; 3.2 was fit for gliformer-large-v1. `score` is never tempered.
+    # Calibrates probabilities/confidence/noul, not score; 1.0 disables scaling.
     temperature: float = float(os.environ.get("JEFF_TEMPERATURE", "3.2"))
 
     host: str = os.environ.get("JEFF_HOST", "0.0.0.0")

@@ -1,9 +1,4 @@
-"""Pydantic models for the jev-compatible wire format.
-
-Mirrors the OpenAPI schema that ships inside ``typesafe-sdk`` (see
-``typesafe_sdk/_schemas/models.py``) so the official SDKs work against this
-server unmodified. Extra fields are tolerated on input, as the real API does.
-"""
+"""Wire models matching typesafe_sdk/_schemas/models.py; extra input fields are ignored."""
 
 from __future__ import annotations
 
@@ -67,11 +62,7 @@ class ScoreQuestion(_Question):
     criteria: list[JSONish] = Field(min_length=1)
 
     def levels(self) -> list[tuple[str, list[str] | None]]:
-        """(label text, examples) per level.
-
-        ``{"what": ..., "examples": [...]}`` is the documented object form;
-        any other dict/list is rendered as text.
-        """
+        """Return (label, examples) per level; unpack {what, examples}, render other values as text."""
         out = []
         for lv in self.criteria:
             if isinstance(lv, dict) and "what" in lv:

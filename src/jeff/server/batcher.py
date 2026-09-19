@@ -1,8 +1,6 @@
-"""Dynamic batcher: coalesce concurrent requests into one backend call.
+"""Collect up to max_batch requests for max_wait_ms, then infer in a worker thread.
 
-Requests wait at most ``max_wait_ms`` for more requests to arrive, or until
-``max_batch`` requests are queued. The batch runs in a worker thread so the event loop
-keeps accepting requests while the model is busy.
+Queue time can be longer while an earlier batch is running.
 """
 
 from __future__ import annotations

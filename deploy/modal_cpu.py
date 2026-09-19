@@ -172,7 +172,7 @@ def bench(
 def main(
     configs: str = "onnx-int8,onnx-fp32,torch-fp32", out: str = "bench/results/cpu.jsonl", force_export: bool = False
 ):
-    """`modal run deploy/modal_cpu.py` = export (if needed, or --force-export) then bench each config at JEFF_CPU cores."""
+    """Export missing encoders (or force with --force-export), then benchmark each config."""
     import json
 
     export.remote(force=force_export)

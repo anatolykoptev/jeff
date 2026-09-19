@@ -15,31 +15,20 @@ ISOLATE_MODES = ("none", "nouls", "all")
 
 @dataclass(frozen=True)
 class PromptOptions:
-    """How question text is rendered into the prompt.
+    """Prompt rendering and isolation defaults; measurements in bench/RESULTS.md."""
 
-    Defaults were chosen from the measurements in bench/RESULTS.md.
-    """
-
-    # Put the instruction text in the group name slot.
     instruction_as_name: bool = True
     # Append option/level descriptions to the label text ("key: description").
     fold_descriptions: bool = True
     # For score levels given as {what, examples}, append examples to the label.
     fold_examples: bool = False
-    # Separator between a label key and its folded description.
     sep: str = ": "
-    # noul rendering. "single": one label holding the question, its sigmoid is
-    # the answer. "single_named": the question is the group name and the one
-    # label is "yes". "yes_no": two labels under the question, renormalized.
-    # The base checkpoint only works with "single".
+    # single: question label; single_named: yes under question; yes_no: yes/no under question.
+    # Use single with the base checkpoint.
     noul_mode: str = "yes_no"
-    # Which questions get their own encoder pass instead of sharing one prompt
-    # with the request's other questions: "none", "nouls" or "all". Groups that
-    # share a prompt influence each other's scores; each isolated question
-    # costs one extra batched encoder pass.
+    # Separate encoder passes prevent cross-question effects: none, nouls, or all.
     isolate: str = "nouls"
-    # How non-string ``state`` is rendered: "kv" (``key: value`` lines),
-    # "json", or "values" (values only, one per line).
+    # Non-string state: key/value lines, JSON, or value-only lines.
     state_format: str = "kv"
 
     def __post_init__(self):
@@ -93,10 +82,7 @@ def _fold(key: str, desc: str | None, opts: PromptOptions) -> str:
 
 
 def _dedupe(labels: tuple[str, ...]) -> tuple[str, ...]:
-    """GLiFormer keys labels by string; identical strings would collapse.
-
-    Make them unique with an index suffix so scores stay aligned to levels.
-    """
+    """Suffix duplicate labels so GLiFormer does not collapse their scores."""
     if len(set(labels)) == len(labels):
         return labels
     seen: dict[str, int] = {}

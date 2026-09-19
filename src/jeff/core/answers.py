@@ -22,12 +22,9 @@ DEFAULT_TEMPERATURE = 3.2
 
 
 def normalize(scores: Sequence[float], temperature: float = 1.0) -> list[float]:
-    """Independent sigmoids -> a distribution.
+    """Normalize independent sigmoids; temperature > 1 flattens the distribution.
 
-    GLiFormer's classification head is not a softmax, so this is a
-    renormalization, not a calibrated posterior. ``temperature`` > 1 flattens
-    it (``s_i ** (1/T)`` before renormalizing, i.e. temperature scaling of the
-    scores); see DEFAULT_TEMPERATURE.
+    This is score renormalization, not a calibrated posterior.
     """
     s = [max(float(x), 0.0) for x in scores]
     if temperature != 1.0:
@@ -39,12 +36,7 @@ def normalize(scores: Sequence[float], temperature: float = 1.0) -> list[float]:
 
 
 def confidence(probs: Sequence[float]) -> float:
-    """How peaked the distribution is, on 0..1.
-
-    ``(p_max - 1/n) / (1 - 1/n)``: 0 for uniform, 1 for one-hot. Close to the
-    worked example in the jev docs (0.7/0.3 -> 0.54 there, 0.55 here); jev does
-    not publish its formula.
-    """
+    """Distribution peakedness: 0 for uniform, 1 for one-hot. jev does not publish its formula."""
     n = len(probs)
     if n < 2:
         return 1.0
@@ -72,9 +64,7 @@ def decode(q: Question, scores: Sequence[float], temperature: float = DEFAULT_TE
         )
     if isinstance(q, ScoreQuestion):
         probs = normalize(scores, temperature)
-        # Expected level under the raw distribution: tempering pulls it toward
-        # the middle level and raises MAE. Probabilities and score therefore
-        # agree only at temperature 1.
+        # Tempering increases score MAE; keep the raw expectation (matches probabilities only at T=1).
         score = sum(i * p for i, p in enumerate(normalize(scores)))
         return ScoreAnswer(
             score=_r(score),

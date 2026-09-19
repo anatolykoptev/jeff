@@ -1,11 +1,6 @@
-"""Export the GLiFormer text encoder (DeBERTa backbone) to ONNX for the CPU arm.
+"""Export the encoder to ONNX via scripts/export_onnx.py.
 
-Only the encoder is exported: ``token_rep_layer(input_ids, attention_mask) ->
-token_embeds``. Prompt/word splitting, the word-level RNN and the classification
-head stay in torch (fp32, a few ms) because their shapes depend on Python-side
-group layout. See ``jeff.backends.onnx_backend``.
-
-CLI: ``scripts/export_onnx.py``.
+The RNN and head stay in PyTorch because their shapes depend on Python group layout.
 """
 
 from __future__ import annotations
@@ -87,18 +82,14 @@ def export_encoder(model_path: str, out_dir: Path | None = None, int8: bool = Fa
     return onnx_path
 
 
-# MatMuls whose input activations must stay fp32: the FFN output projections,
-# whose post-GELU input carries DeBERTa's activation outliers. Quantizing them
-# moves raw scores by 0.28 on average; skipping them leaves 0.02 (bench/RESULTS.md).
+# Keep FFN output projections fp32: post-GELU outliers amplify quantization error (bench/RESULTS.md).
 FP32_NODE_PATTERNS = (re.compile(r"/(?!.*attention/).*output/dense/MatMul$"),)
 
 
 def quantize_int8(src: Path, dst: Path, exclude_patterns=FP32_NODE_PATTERNS, reduce_range: bool = True) -> Path:
-    """Dynamic int8 (per-channel weights, runtime-quantized activations) for MatMul/Gemm.
+    """Quantize MatMul/Gemm to dynamic int8, leaving exclude_patterns in fp32.
 
-    Nodes matching ``exclude_patterns`` stay fp32; see ``FP32_NODE_PATTERNS``.
-    ``reduce_range`` keeps weights to 7 bits; without it ORT's u8s8 kernels on
-    x86 without VNNI overflow their int16 accumulators.
+    reduce_range uses 7-bit weights to avoid u8s8 accumulator overflow on x86 without VNNI.
     """
     import onnx
     from onnxruntime.quantization import QuantType, quantize_dynamic

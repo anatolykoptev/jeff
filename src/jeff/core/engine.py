@@ -8,7 +8,7 @@ from .groups import PromptOptions, build_groups
 from .schemas import SystemOneRequest, SystemOneResponse, Usage
 from .state import serialize_state
 
-# jev does not meter output tokens; report a nominal count per answer so the field is populated.
+# Nominal output usage, not measured generation tokens.
 OUTPUT_TOKENS_PER_ANSWER = 6
 
 
@@ -23,16 +23,13 @@ class Engine:
         self.backend = backend
         self.model_name = model_name
         self.opts = opts or PromptOptions()
-        # Applied when renormalizing scores into probabilities (see answers.normalize).
         self.temperature = temperature
 
     def run(self, req: SystemOneRequest) -> SystemOneResponse:
         return self.run_batch([req])[0]
 
     def run_batch(self, reqs: list[SystemOneRequest]) -> list[SystemOneResponse]:
-        # One unit is one encoder pass: a text plus the groups that share its
-        # prompt. Isolated questions get their own unit; the rest of a request's
-        # questions share one.
+        # Each unit is an encoder pass; owner maps isolated/shared units back to requests.
         texts: list[str] = []
         units: list[list[Group]] = []
         owner: list[int] = []

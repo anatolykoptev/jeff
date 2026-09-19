@@ -1,10 +1,6 @@
-"""Temperature scaling for jeff's renormalized probabilities.
+"""Fit p_i^(1/T) / sum_j p_j^(1/T) by NLL on saved accuracy results.
 
-jeff's `probabilities` are independent sigmoids renormalized to sum to 1, so
-sharpening/flattening them with p_i^(1/T) / sum_j p_j^(1/T) is exactly
-temperature scaling of the underlying scores. Fit T by NLL on one run's rows
-in bench/results/accuracy.jsonl, leave-one-task-out, and report ECE before and
-after so the number can be trusted on unseen tasks.
+Report leave-one-task-out calibration error (ECE) before and after scaling.
 
     uv run python bench/calibrate.py --run large/default
 """

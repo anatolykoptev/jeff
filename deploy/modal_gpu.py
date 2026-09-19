@@ -23,17 +23,14 @@ GPU = os.environ.get("JEFF_GPU", "L4")
 MODEL_REPO = os.environ.get("JEFF_MODEL_REPO", "knowledgator/gliformer-large-v1")
 MODEL_DIRNAME = MODEL_REPO.split("/")[-1]
 MODELS_MOUNT = "/models"
-# Keep a warm container only for `modal deploy`; `modal run`/`serve` should not
-# keep an idle Server container running during a bench or download.
+# Keep warm containers only for deploy, not benchmarks or ephemeral servers.
 MIN_CONTAINERS = int(os.environ.get("JEFF_MIN_CONTAINERS", "1")) if "deploy" in sys.argv else 0
 MAX_INPUTS = int(os.environ.get("JEFF_MAX_INPUTS", "64"))
-# One container's web ingress caps near 50 req/s regardless of GPU (bench/RESULTS.md),
-# so autoscale as soon as a container has more than TARGET requests in flight.
+# Scale early: measured ingress caps at ~50 req/s per container (bench/RESULTS.md).
 TARGET_INPUTS = int(os.environ.get("JEFF_TARGET_INPUTS", "16"))
 MAX_CONTAINERS = int(os.environ.get("JEFF_MAX_CONTAINERS", "8"))
 
-# GPU defaults; anything set locally wins. torch.compile is off because it is
-# slower than the plain flashdeberta path (bench/RESULTS.md).
+# Local env overrides these defaults. Compilation was slower than flash alone (bench/RESULTS.md).
 SERVER_DEFAULTS: dict[str, str | None] = {
     "JEFF_BACKEND": "torch",
     "JEFF_DEVICE": "cuda",
@@ -77,7 +74,7 @@ image = (
 
 @app.function(image=image, volumes={MODELS_MOUNT: volume}, timeout=60 * 30)
 def download(repo: str = MODEL_REPO, force: bool = False):
-    """Fetch weights into the shared Volume so containers do not download from the Hub."""
+    """Cache weights in the shared Volume."""
     from huggingface_hub import snapshot_download
 
     target = f"{MODELS_MOUNT}/{repo.split('/')[-1]}"
@@ -91,7 +88,7 @@ def download(repo: str = MODEL_REPO, force: bool = False):
 
 
 def _ensure_weights():
-    """See the latest Volume commit; fetch weights inline if nobody ran ``download`` yet."""
+    """Reload the Volume and download missing weights."""
     volume.reload()
     if not os.path.exists(f"{MODELS_MOUNT}/{MODEL_DIRNAME}/gliner_config.json"):
         from huggingface_hub import snapshot_download
@@ -136,11 +133,9 @@ class Server:
     timeout=60 * 30,
 )
 def bench(seq_lens: str = "128,512,1024", batch_sizes: str = "1,4,16,32", iters: int = 10, env: str = ""):
-    """Raw backend latency (no HTTP) for the GPU this file was invoked with.
+    """Measure backend latency per sequence length and batch size, without HTTP.
 
-    ``env`` is a comma-separated list of ``JEFF_X=Y`` overrides (e.g.
-    ``JEFF_COMPILE=0,JEFF_ATTN=eager``). Prints one JSON row per (seq_len,
-    batch) with ms/batch and texts/s.
+    env accepts comma-separated overrides, e.g. JEFF_COMPILE=0,JEFF_ATTN=flash.
     """
     import json
     import statistics
@@ -210,7 +205,7 @@ CONFIGS = {
     image=image, gpu=GPU, volumes={MODELS_MOUNT: volume}, secrets=[modal.Secret.from_dict(server_env)], timeout=60 * 30
 )
 def dtype_check(dtypes: str = "bfloat16,float16"):
-    """Score the same requests under each dtype and report the max score difference (accuracy cost of fp16)."""
+    """Compare raw label scores across dtypes."""
     import json
 
     from jeff.backends.torch_backend import TorchBackend
@@ -254,7 +249,7 @@ def dtype_check(dtypes: str = "bfloat16,float16"):
     image=image, gpu=GPU, volumes={MODELS_MOUNT: volume}, secrets=[modal.Secret.from_dict(server_env)], timeout=60 * 30
 )
 def profile(seq_len: int = 128, batch: int = 1, iters: int = 20):
-    """Split bs=1 time into host preprocessing / forward / decode and CPU vs CUDA time."""
+    """Profile forward time, preprocessing/decoding overhead, and CPU/CUDA work."""
     import json
     import statistics
 
@@ -335,7 +330,7 @@ def loadtest(
     label: str = "",
     path: str = "/v1/systemone",
 ):
-    """Run bench/load.py from inside Modal (no client-side WAN latency) against a served jeff URL."""
+    """Run bench/load.py inside Modal to exclude client WAN latency."""
     import asyncio
     import json
     import sys
@@ -355,7 +350,7 @@ def loadtest(
 
 @app.local_entrypoint()
 def main(configs: str = "flash,eager,flash+compile", out: str = "bench/results/gpu.jsonl"):
-    """`modal run deploy/modal_gpu.py` = download (if needed), then bench each config on JEFF_GPU."""
+    """Download weights if missing, then benchmark each config on JEFF_GPU."""
     import json
 
     download.remote()
@@ -371,7 +366,7 @@ def main(configs: str = "flash,eager,flash+compile", out: str = "bench/results/g
 
 @app.function(image=image, timeout=600)
 def ping(url: str, n: int = 10):
-    """Round-trip times from inside Modal on a persistent connection: healthz (no model) vs a 1-question request."""
+    """Compare health-check and single-question latency over a persistent connection inside Modal."""
     import json
 
     import httpx

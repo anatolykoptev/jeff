@@ -1,15 +1,9 @@
-"""Build the labeled eval set from public classification datasets.
-
-Each task maps one Hugging Face dataset onto one jev primitive and writes a
-fixed, label-balanced sample to ``bench/data/<task>.jsonl`` so the eval runner
-(``bench/eval_accuracy.py``) needs neither the ``datasets`` package nor the
-network. The sampled files are committed; rerun only to change tasks or size.
+"""Build committed, label-balanced samples in bench/data/<task>.jsonl for offline eval.
 
     uv run --group bench python bench/build_evalset.py [--n 200] [--tasks ag_news sst5 ...]
 
-Row format: ``{"id", "state", "questions", "gold"}`` where ``questions`` is a
-complete jev ``questions`` map with a single question ``q`` and ``gold`` is the
-option key (choice), the level index (score) or a bool (noul).
+Rows contain id, state, questions (one question, q), and gold
+(option key for choice, level index for score, boolean for noul).
 """
 
 from __future__ import annotations
@@ -33,9 +27,7 @@ def _trunc(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Task definitions. `question` is written the way a jev user would write it:
-# an instruction plus criteria with short descriptions, so the
-# `fold_descriptions` variant has something to fold.
+# Include criteria descriptions to exercise the fold_descriptions prompt variant.
 
 AG_LABELS = ["world", "sports", "business", "sci_tech"]
 EMOTION_LABELS = ["sadness", "joy", "love", "anger", "fear", "surprise"]
