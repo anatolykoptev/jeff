@@ -190,8 +190,7 @@ uv run pytest -q                                   # 30 tests; base checkpoint n
 Layout: `src/jeff/core` (schemas, state rendering, prompt groups, decoder, engine; pure
 functions), `src/jeff/backends` (torch and ONNX backends), `src/jeff/server` (FastAPI app,
 batcher, settings), `deploy/` (Modal GPU and CPU apps), `bench/` (eval set builder and runner,
-calibration fit, load generator, noul probe, results), `PLAN.md` (design decisions and the
-log of what was measured).
+calibration fit, load generator, noul probe, results).
 
 Bench scripts:
 
