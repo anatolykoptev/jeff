@@ -208,3 +208,7 @@ The [SDK tests](tests/test_sdk_live.py) use a live server with a fake backend.
 
 Code: [core](src/jeff/core/) · [backends](src/jeff/backends/) · [server](src/jeff/server/) ·
 [deploy](deploy/) · [bench](bench/)
+
+## License
+
+MIT. See [LICENSE](LICENSE).

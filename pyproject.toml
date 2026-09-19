@@ -3,6 +3,8 @@ name = "jeff"
 version = "0.1.0"
 description = "jev-compatible System One API served by GLiFormer"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "gliformer>=0.1.1",
