@@ -1,6 +1,7 @@
 """Evaluate bench/data/*.jsonl in-process or over a jev-compatible API.
 
-    uv run python bench/eval_accuracy.py jeff --model models/gliformer-large-v1 --variants default nodesc
+    uv run python bench/eval_accuracy.py jeff --model models/gliformer-large-v1
+    uv run python bench/eval_accuracy.py jeff --prompt-profile original --variants default nodesc
     uv run python bench/eval_accuracy.py jev -c 8
     uv run python bench/eval_accuracy.py http --url https://...modal.run --key k1 --name jeff-l4 -c 8
     uv run python bench/eval_accuracy.py summarize
@@ -8,6 +9,8 @@
 jev reads TYPESAFE_API_KEY from the environment or .env. Results append to
 bench/results/accuracy.jsonl. In-process latency is amortized batch time; HTTP
 latency is per request. Token counts use each backend's tokenizer.
+The in-process default uses task-specific spam/irony labels; --prompt-profile original
+reproduces production prompts. HTTP runs always use the target server's prompts.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import statistics
 import sys
 import time
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +44,41 @@ VARIANTS: dict[str, dict[str, Any]] = {
     "single": {"noul_mode": "single"},
     "json": {"state_format": "json"},
 }
+
+# Task-specific controls; never used by the production API.
+TASK_LABELS = {
+    "sms_spam": ("spam", "not spam"),
+    "irony": ("ironic", "not ironic"),
+}
+
+
+class _PromptProfileBackend:
+    def __init__(self, backend, replacements):
+        self.backend = backend
+        self.name = backend.name
+        self.replacements = replacements
+
+    def score(self, texts, groups):
+        return self.backend.score(texts, [[self.replacements.get(g, g) for g in gs] for gs in groups])
+
+
+def profile_backend(backend, items, opts, profile):
+    if profile == "original":
+        return backend
+    if profile != "task-labels":
+        raise ValueError(f"Unknown prompt profile: {profile}")
+    from jeff.core import SystemOneRequest, build_groups
+
+    replacements = {}
+    for item in items:
+        labels = TASK_LABELS.get(item["task"])
+        if labels is None:
+            continue
+        req = SystemOneRequest.model_validate(body_for(item, "benchmark"))
+        (group,) = build_groups(req.questions, opts)
+        replacements[group] = replace(group, labels=labels, name=None if item["task"] == "irony" else group.name)
+    return _PromptProfileBackend(backend, replacements)
+
 
 # --multi puts these before the labeled question to measure context effects (see noul_probe.py).
 DISTRACTORS = {
@@ -100,9 +139,12 @@ def run_jeff(args):
     for vname in args.variants:
         opts = PromptOptions(**VARIANTS[vname])
         engine = Engine(
-            backend, tag, opts, **({"temperature": args.temperature} if args.temperature is not None else {})
+            profile_backend(backend, items, opts, args.prompt_profile),
+            tag,
+            opts,
+            **({"temperature": args.temperature} if args.temperature is not None else {}),
         )
-        run = f"{tag}{'+multi' if args.multi else ''}/{vname}"
+        run = f"{tag}{'+multi' if args.multi else ''}/{args.prompt_profile}/{vname}"
         rows, t_total = [], 0.0
         for i in range(0, len(items), args.batch):
             chunk = items[i : i + args.batch]
@@ -118,6 +160,8 @@ def run_jeff(args):
                         "run": run,
                         "system": "jeff",
                         "variant": vname,
+                        "prompt_profile": args.prompt_profile,
+                        "temperature": engine.temperature,
                         "task": it["task"],
                         "kind": it["kind"],
                         "id": it["id"],
@@ -460,7 +504,9 @@ def summarize(args):
 
 
 def main():
+    global OUT
     ap = argparse.ArgumentParser()
+    ap.add_argument("--results", type=Path, default=OUT, help="results JSONL to append to or summarize")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(p):
@@ -476,6 +522,12 @@ def main():
     p.add_argument("--batch", type=int, default=16)
     p.add_argument("--variants", nargs="*", default=["default"], choices=list(VARIANTS))
     p.add_argument("--temperature", type=float, default=None, help="override jeff.core.answers.DEFAULT_TEMPERATURE")
+    p.add_argument(
+        "--prompt-profile",
+        choices=("original", "task-labels"),
+        default="task-labels",
+        help="task-labels uses explicit spam/irony labels; original matches production prompts",
+    )
 
     for name in ("http", "jev"):
         p = sub.add_parser(name)
@@ -491,7 +543,10 @@ def main():
     p.add_argument("--full", action="store_true", help="only runs that cover every item (drops --limit subsets)")
 
     args = ap.parse_args()
+    OUT = args.results
     if args.cmd == "jeff":
+        if args.prompt_profile == "task-labels" and args.variants != ["default"]:
+            ap.error("task-labels supports --variants default; use --prompt-profile original for variant sweeps")
         run_jeff(args)
     elif args.cmd == "jev":
         key = args.key or os.environ.get("TYPESAFE_API_KEY") or _dotenv("TYPESAFE_API_KEY")

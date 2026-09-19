@@ -191,9 +191,11 @@ Measured on 1,600 labeled items across eight datasets:
 | Sequential p50 latency from a laptop | 151 ms (L4 / Modal HTTP) | 129 ms |
 | Cost per 1M single-question requests | ~$2.6 (L4 / Modal HTTP) | ~$15.6 |
 | AG News topic accuracy | 75.5% | 90.5% |
+| [JevBench](https://github.com/fstandhartinger/jevbench) standard tier (72 public items) | 76.4% | 98.6% |
+| JevBench hard tier (111 public items) | 37.8% | 72.1% |
 
 jeff is close on binary sentiment, tied on emotion classification, and substantially behind
-on irony and reading comprehension. Costs depend on workload and utilization.
+on irony, reading comprehension, and JevBench's reasoning-heavy hard tier. Costs depend on workload and utilization.
 [Full results, methodology, and reproduction commands →](bench/RESULTS.md)
 
 ## Development

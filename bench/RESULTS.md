@@ -1,11 +1,105 @@
 # Benchmark results
 
+For the September 19 benchmark-only spam/irony prompt profile and full 1,600-item reruns,
+see [task-label prompt results](PROMPT_RESULTS.md). The measurements below retain their original prompts.
+
 All numbers: `knowledgator/gliformer-large-v1`, the 3-question request in
 `bench/load.py` (choice + score + noul, 149 tokens) unless noted. GPU tables come
 from `modal run deploy/modal_gpu.py` (`bench/results/gpu.jsonl`), HTTP tables
 from `bench/load.py` / `deploy/modal_gpu.py::loadtest` (`bench/results/http_modal.jsonl`).
 Regenerate the tables with `uv run python bench/summarize.py`. Modal prices are
 on-demand list prices (Sep 2026); jev lists $0.042 per 1M input tokens.
+
+## JevBench (bench/jevbench.py, 2026-09-19)
+
+[JevBench](https://github.com/fstandhartinger/jevbench) v1.2.1 (commit `69b922b`) is Benchmark
+Heaven's benchmark for jev-class decision models. The three public tiers (231 decisions: easy 48,
+standard 72, hard 111) were run one request at a time from a laptop in North America through
+jevbench's own `typesafe` adapter, runner and scoring code, against jeff on the laptop (MPS,
+fp32), jeff on Modal L4 (`modal serve`, bf16, flash) and jev's production API on the same day.
+Per-item records: `bench/results/jevbench/<run>/<tier>.jsonl`; rerun with
+`uv run python bench/jevbench.py run ...` and regenerate the tables with
+`uv run python bench/jevbench.py summarize`.
+
+Caveats before the numbers: the judge tier (146 items) and the held-out halves of the other
+tiers are not published, so the Intelligence axis is renormalised over the public tiers
+(hard 30, standard 28, easy 14) and Speed uses the standard tier instead of jevbench's
+242-item standard+judge run. jeff's cost is a labelled estimate, not a tariff. The jevbench
+score column is therefore indicative only; the published-systems table shows what the same
+public items give for the official entrants.
+
+### JevBench public tiers (jevbench @ 69b922b, one request at a time)
+
+| run | endpoint | easy (48) | standard (72) | hard (111) | hard Brier | hard ECE | hard fidelity | std p50 ms | std p95 ms | hard p50 ms | first ms | $/1k decisions |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| jeff-local-mps | cpu | 100.0% | 75.0% | 38.7% | 0.745 | 0.226 | 74.4 | 108 | 137 | 392 | 201 |  |
+| jeff-modal-l4 | gpu | 100.0% | 76.4% | 37.8% | 0.745 | 0.217 | 74.3 | 266 | 291 | 273 | 31922 | 0.0173 |
+| jev | api | 100.0% | 98.6% | 72.1% | 0.362 | 0.094 | 74.9 | 233 | 359 | 237 | 254 | 0.0384 |
+
+#### Published systems on the same public items (jevbench results/v1.2 per-task artifact)
+
+| system | easy (48) | standard (72) | hard (111) | official hard (220) | official JevBench Score |
+|---|---:|---:|---:|---:|---:|
+| Jev 1.13.0 (TypeSafe AI) | 100.0% | 98.6% | 73.0% | 74.1% | 75.3 |
+| djev (Maisa, diffusion-gemma) | 100.0% | 98.6% | 67.6% | 69.5% | 74.3 |
+| SemIf, formerly OpenJev (Qwen3.5-4B, TheoLeeCJ) | 100.0% | 98.6% | 61.3% | 59.5% | 74.6 |
+| system-one-open (Gemma 4 E2B LoRA on an L4) | 100.0% | 93.1% | 48.6% | 49.1% | 68.7 |
+| open-jev-deberta-v3-large (local CPU) | 100.0% | 43.1% | 37.8% | 36.4% | 64.4 |
+
+#### JevBench Score axes (composite_v12; Intelligence without the unpublished judge tier)
+
+| run | Intelligence | Calibration | Speed (adj. p50/p95 ms) | Cost | JevBench Score | Intelligence only |
+|---|---:|---:|---:|---:|---:|---:|
+| jeff-local-mps | 64.8 | 64.6 | 88.1 (365/425) |  |  |  |
+| jeff-modal-l4 | 64.9 | 65.4 | 83.0 (682/731) | 62.9 | 68.6 | 64.9 |
+| jev | 87.8 | 78.0 | 90.8 (233/359) | 52.5 | 75.6 | 87.8 |
+
+#### Hard tier by family (correct / n)
+
+| family | jeff-local-mps | jeff-modal-l4 | jev |
+|---|---:|---:|---:|
+| adversarial | 6/6 | 6/6 | 6/6 |
+| ambiguous | 0/7 | 0/7 | 6/7 |
+| judge_hard | 8/17 | 8/17 | 12/17 |
+| long_policy | 2/19 | 1/19 | 12/19 |
+| multi_hop | 7/18 | 7/18 | 15/18 |
+| probability | 4/10 | 4/10 | 7/10 |
+| routing_hard | 3/5 | 3/5 | 5/5 |
+| temporal_numeric | 6/15 | 6/15 | 4/15 |
+| tradeoff | 3/6 | 3/6 | 5/6 |
+| trap | 4/8 | 4/8 | 8/8 |
+
+- `jeff-local-mps`: http://localhost:8000 (cpu), model `jev-latest`, price None/M in, 0.0/M out.  uv run jeff on an M2 Max (MPS, fp32), defaults; no price (laptop).
+- `jeff-modal-l4`: https://llamaindex-research--jeff-gpu-server-web-dev.modal.run (gpu), model `jev-latest`, price 0.03/M in, 0.0/M out. ESTIMATE: $0.030 per 1M input tokens = one L4 container ($0.80/h) at its measured ~50 req/s Modal ingress cap with 149-token requests (bench/RESULTS.md); jeff counts DeBERTa prompt+text tokens, not jev billing tokens. modal serve deploy/modal_gpu.py, client on a laptop in North America.
+- `jev`: https://api.typesafe.ai (api), model `jev-latest`, price 0.042/M in, 0.0/M out. public tariff, output not billed. client on a laptop in North America.
+
+Findings:
+
+- **Easy tier is saturated** (48/48) for jeff, as for every published entrant except Needle 3.
+- **Standard tier: 76% vs jev 99%.** Extraction and routing are 12/12, policy 11/12, ordinal
+  10/12; the misses are adequacy judging (4/12, majority class "yes") and intent (6/12) on the
+  L4 run. Paraphrase pairs agree 86% of the time and are both correct 69% (jev 97% / 97%).
+- **Hard tier: 38% vs jev 72%** on the public 111. That is the level of
+  open-jev-deberta-v3-large (37.8%), the other DeBERTa-class entrant, and below every
+  LLM-based rebuild (system-one-open 49%, SemIf 61%, djev 68%). jeff scores 0/7 on ambiguous
+  items and 1/19 on long policies (3-4k-token states), 6/6 on adversarial items, and 6/15 on
+  temporal/numeric items where jev gets 4/15 (jev's published weakness, 27% on the full 30).
+- **Calibration.** Hard-tier ECE 0.22 vs jev 0.09, standard-tier ECE 0.29 vs 0.05. Mean
+  top-label confidence on the hard tier is 0.54 (jev 0.79): the temperature-3.2 scaling
+  flattens every distribution, so jeff is underconfident on the tiers it gets right (easy:
+  100% accuracy at ~0.65 confidence) and its Brier on the standard tier is 0.50 vs 0.03.
+  Fidelity to the gold distributions on the 10 probability items matches jev (74 vs 75)
+  because the flattened distributions happen to land near the gold ones.
+- **Speed.** Short items: 108 ms p50 on the laptop, 266 ms through Modal (jev 233 ms). Hard
+  items with 3-4k tokens: 0.5-0.6 s on L4 (jev 0.2-0.3 s) and up to 7 s on fp32 MPS. The
+  first L4 request was a 32 s cold start (`modal serve` had scaled to zero); jevbench reports
+  it separately and it is not in p50/p95. After jevbench's x2 + 0.15 s adjustment for
+  self-hosted endpoints jeff's Speed is 83 vs jev's 91.
+- **Cost.** $0.017 per 1,000 decisions at the L4 estimate vs jev's $0.038 (jeff also counts
+  fewer tokens on the hard tier: 1,116 vs 1,506 mean, DeBERTa vs jev billing tokens).
+- **Score, with the caveats above:** 68.6 for jeff on L4 vs 75.6 for jev on the same items
+  (jev's official score is 75.3). Intelligence alone is 65 vs 88. fp32 MPS and bf16 L4 differ
+  by one item on the standard and one on the hard tier.
 
 ## Recommendation (2026-09-18)
 

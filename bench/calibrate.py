@@ -12,6 +12,7 @@ import json
 import math
 import statistics
 from collections import defaultdict
+from pathlib import Path
 
 from eval_accuracy import OUT, ece
 
@@ -58,8 +59,9 @@ def ece_of(items, t) -> float:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", default="large/default")
+    ap.add_argument("--results", type=Path, default=OUT, help="accuracy results JSONL")
     args = ap.parse_args()
-    rows = [json.loads(line) for line in OUT.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in args.results.read_text().splitlines() if line.strip()]
     rows = {r["id"]: r for r in rows if r["run"] == args.run}.values()
     by_task = defaultdict(list)
     for r in rows:

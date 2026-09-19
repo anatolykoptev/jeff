@@ -7,3 +7,4 @@ __pycache__/
 bench/results/*.log
 .env
 PLAN.md
+bench/.jevbench/
