@@ -51,14 +51,21 @@ def test_sdk_roundtrip(base_url):
     assert 0 <= result.nouls["billing"].noul <= 1
     assert result.choices["tone"].choice == "angry"
     assert result.scores["urgency"].score > 1
-    assert result.usage.input_tokens == 42
+    assert (
+        result.usage.input_tokens == 84
+    )  # 42 per encoder pass from the fake backend; the noul is isolated, so two passes
     models = client.models.list()
     assert any(m.name == "jev-latest" for m in models.models)
 
 
 def test_sdk_errors(base_url):
-    from typesafe_sdk import TypeSafeAuthenticationError, TypeSafeClient, TypeSafeUnprocessableEntityError, Noul
-    from typesafe_sdk import RetryPolicy
+    from typesafe_sdk import (
+        Noul,
+        RetryPolicy,
+        TypeSafeAuthenticationError,
+        TypeSafeClient,
+        TypeSafeUnprocessableEntityError,
+    )
 
     bad = TypeSafeClient(api_key="wrong", base_url=base_url, retry=RetryPolicy(max_retries=0))
     with pytest.raises(TypeSafeAuthenticationError):

@@ -1,7 +1,7 @@
 """Dynamic batcher: coalesce concurrent requests into one backend call.
 
-Requests wait at most ``max_wait_ms`` for company, or until ``max_batch``
-requests are queued. The batch runs in a worker thread so the event loop
+Requests wait at most ``max_wait_ms`` for more requests to arrive, or until
+``max_batch`` requests are queued. The batch runs in a worker thread so the event loop
 keeps accepting requests while the model is busy.
 """
 
@@ -86,7 +86,7 @@ class Batcher:
                     break
                 try:
                     jobs.append(await asyncio.wait_for(self.queue.get(), timeout=remaining))
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     break
             now = time.perf_counter()
             for j in jobs:
@@ -94,7 +94,7 @@ class Batcher:
             t0 = time.perf_counter()
             try:
                 results = await loop.run_in_executor(None, self.engine.run_batch, [j.req for j in jobs])
-            except Exception as e:  # one bad batch must not kill the loop
+            except Exception as e:  # noqa: BLE001 - one bad batch must not stop the loop
                 for j in jobs:
                     if not j.fut.done():
                         j.fut.set_exception(e)

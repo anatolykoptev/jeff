@@ -1,8 +1,5 @@
 """Server behaviour with a fake backend (no model needed)."""
 
-import asyncio
-
-import pytest
 from fastapi.testclient import TestClient
 
 from jeff.core import Engine, ScoredText

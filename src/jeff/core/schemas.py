@@ -1,21 +1,20 @@
 """Pydantic models for the jev-compatible wire format.
 
 Mirrors the OpenAPI schema that ships inside ``typesafe-sdk`` (see
-``typesafe_sdk/_schemas/models.py``) so the official SDKs can talk to this
+``typesafe_sdk/_schemas/models.py``) so the official SDKs work against this
 server unmodified. Extra fields are tolerated on input, as the real API does.
 """
 
 from __future__ import annotations
 
-import json
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .state import serialize_state
 
-State = Union[str, dict[str, Any], list[Any]]
-JSONish = Union[str, dict[str, Any], list[Any]]
+State = str | dict[str, Any] | list[Any]
+JSONish = str | dict[str, Any] | list[Any]
 
 
 def _text(v: Any) -> str | None:
@@ -86,7 +85,7 @@ class ScoreQuestion(_Question):
         return {str(i): lv for i, lv in enumerate(self.criteria)}
 
 
-Question = Annotated[Union[NoulQuestion, ChoiceQuestion, ScoreQuestion], Field(discriminator="type")]
+Question = Annotated[NoulQuestion | ChoiceQuestion | ScoreQuestion, Field(discriminator="type")]
 
 
 class SystemOneRequest(BaseModel):
@@ -131,7 +130,7 @@ class ScoreAnswer(BaseModel):
     probabilities: dict[str, float]
 
 
-Answer = Union[NoulAnswer, ChoiceAnswer, ScoreAnswer]
+Answer = NoulAnswer | ChoiceAnswer | ScoreAnswer
 
 
 class SystemOneResponse(BaseModel):

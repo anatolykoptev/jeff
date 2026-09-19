@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.5"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.16", "ty>=0.0.1a1"]
 onnx = ["onnx>=1.16", "onnxruntime>=1.18"]
 
 [project.scripts]
@@ -25,11 +25,21 @@ jeff = "jeff.server.main:main"
 requires = ["uv_build>=0.11.19,<0.12.0"]
 build-backend = "uv_build"
 
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ty.environment]
+root = [".", "src", "bench"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [dependency-groups]
+bench = [
+    "datasets>=5.0.1",
+]
 dev = [
     "typesafe-sdk>=0.7.0",
 ]

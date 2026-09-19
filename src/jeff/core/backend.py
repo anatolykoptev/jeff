@@ -10,9 +10,9 @@ from typing import Protocol, runtime_checkable
 class Group:
     """One GLiFormer classification group.
 
-    ``name`` and ``description`` both land in the prompt as free text
-    (``[SCHEMA] name description [CLASS] label ... [SEP]``), so they are the
-    slots the jev ``instructions`` text goes into.
+    ``name`` and ``description`` both appear in the prompt as free text
+    (``[SCHEMA] name description [CLASS] label ... [SEP]``), so they are where
+    the jev ``instructions`` text goes.
     """
 
     key: str

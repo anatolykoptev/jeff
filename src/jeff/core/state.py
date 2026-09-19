@@ -1,7 +1,6 @@
 """Serialize jev ``state`` (string | object | array) into plain text.
 
-GLiFormer is text-only, as is jev. The format is deliberately simple and
-stable: objects become ``key: value`` lines, arrays become one item per line,
+GLiFormer is text-only, as is jev. The format is simple and stable: objects become ``key: value`` lines, arrays become one item per line,
 nested containers are rendered as compact JSON.
 """
 
@@ -10,11 +9,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
+STATE_FORMATS = ("kv", "json", "values")
 
-def serialize_state(state: Any) -> str:
+
+def serialize_state(state: Any, fmt: str = "kv") -> str:
+    if fmt not in STATE_FORMATS:
+        raise ValueError(f"state format must be one of {STATE_FORMATS}, got {fmt!r}")
     if isinstance(state, str):
         return state
+    if fmt == "json" and isinstance(state, (dict, list)):
+        return json.dumps(state, ensure_ascii=False, indent=None)
     if isinstance(state, dict):
+        if fmt == "values":
+            return "\n".join(_scalar(v) for v in state.values())
         return "\n".join(f"{k}: {_scalar(v)}" for k, v in state.items())
     if isinstance(state, list):
         return "\n".join(_scalar(v) for v in state)

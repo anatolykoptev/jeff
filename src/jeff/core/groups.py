@@ -9,14 +9,15 @@ from .schemas import ChoiceQuestion, NoulQuestion, Question, ScoreQuestion
 
 NOUL_YES = "yes"
 NOUL_NO = "no"
+NOUL_MODES = ("single", "single_named", "yes_no")
+ISOLATE_MODES = ("none", "nouls", "all")
 
 
 @dataclass(frozen=True)
 class PromptOptions:
-    """Knobs for how question text is rendered into the prompt.
+    """How question text is rendered into the prompt.
 
-    These are the variants §5 of the plan evaluates. Defaults are the current
-    best guess, not measured yet.
+    Defaults were chosen from the measurements in bench/RESULTS.md.
     """
 
     # Put the instruction text in the group name slot.
@@ -28,12 +29,31 @@ class PromptOptions:
     # Separator between a label key and its folded description.
     sep: str = ": "
     # noul rendering. "single": one label holding the question, its sigmoid is
-    # the answer (robust on base and large in probes). "yes_no": two labels,
-    # renormalized (equally good on large, unreliable on base).
-    noul_mode: str = "single"
+    # the answer. "single_named": the question is the group name and the one
+    # label is "yes". "yes_no": two labels under the question, renormalized.
+    # The base checkpoint only works with "single".
+    noul_mode: str = "yes_no"
+    # Which questions get their own encoder pass instead of sharing one prompt
+    # with the request's other questions: "none", "nouls" or "all". Groups that
+    # share a prompt influence each other's scores; each isolated question
+    # costs one extra batched encoder pass.
+    isolate: str = "nouls"
+    # How non-string ``state`` is rendered: "kv" (``key: value`` lines),
+    # "json", or "values" (values only, one per line).
+    state_format: str = "kv"
+
+    def __post_init__(self):
+        if self.noul_mode not in NOUL_MODES:
+            raise ValueError(f"noul_mode must be one of {NOUL_MODES}, got {self.noul_mode!r}")
+        if self.isolate not in ISOLATE_MODES:
+            raise ValueError(f"isolate must be one of {ISOLATE_MODES}, got {self.isolate!r}")
+
+    def isolated(self, q: Question) -> bool:
+        return self.isolate == "all" or (self.isolate == "nouls" and isinstance(q, NoulQuestion))
 
 
-def build_groups(questions: dict[str, Question], opts: PromptOptions = PromptOptions()) -> list[Group]:
+def build_groups(questions: dict[str, Question], opts: PromptOptions | None = None) -> list[Group]:
+    opts = opts or PromptOptions()
     return [_group_for(qid, q, opts) for qid, q in questions.items()]
 
 
@@ -44,6 +64,9 @@ def _group_for(qid: str, q: Question, opts: PromptOptions) -> Group:
         if opts.noul_mode == "single":
             label = _fold(instr or qid, q.criterion("true"), opts)
             return Group(key=qid, labels=(label,), name=None)
+        if opts.noul_mode == "single_named":
+            label = _fold(NOUL_YES, q.criterion("true"), opts)
+            return Group(key=qid, labels=(label,), name=name)
         labels = (
             _fold(NOUL_YES, q.criterion("true"), opts),
             _fold(NOUL_NO, q.criterion("false"), opts),
@@ -78,7 +101,7 @@ def _dedupe(labels: tuple[str, ...]) -> tuple[str, ...]:
         return labels
     seen: dict[str, int] = {}
     out = []
-    for l in labels:
-        seen[l] = seen.get(l, 0) + 1
-        out.append(l if seen[l] == 1 else f"{l} #{seen[l]}")
+    for label in labels:
+        seen[label] = seen.get(label, 0) + 1
+        out.append(label if seen[label] == 1 else f"{label} #{seen[label]}")
     return tuple(out)
