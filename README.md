@@ -191,12 +191,14 @@ Measured on 1,600 labeled items across eight datasets:
 | Sequential p50 latency from a laptop | 151 ms (L4 / Modal HTTP) | 129 ms |
 | Cost per 1M single-question requests | ~$2.6 (L4 / Modal HTTP) | ~$15.6 |
 | AG News topic accuracy | 75.5% | 90.5% |
-| [JevBench](https://github.com/fstandhartinger/jevbench) standard tier (72 public items) | 76.4% | 98.6% |
-| JevBench hard tier (111 public items) | 37.8% | 72.1% |
+| [JevBench](https://github.com/fstandhartinger/jevbench) v1.2.2 score (official, rank of 18) | 66.9 (#9) | 75.3 (#2) |
+| JevBench Intelligence (easy / standard / judge / hard accuracy) | 63.9 (100 / 76 / 62 / 38%) | 90.4 (100 / 99 / 95 / 74%) |
 
 jeff is close on binary sentiment, tied on emotion classification, and substantially behind
-on irony, reading comprehension, and JevBench's reasoning-heavy hard tier. Costs depend on workload and utilization.
-[Full results, methodology, and reproduction commands →](bench/RESULTS.md)
+on irony, reading comprehension, and JevBench's judge and hard tiers. On JevBench its rank
+comes from cost; it is #14 of 18 on intelligence. Costs depend on workload and utilization.
+[Full results, methodology, and reproduction commands →](bench/RESULTS.md) ·
+[JevBench leaderboard →](https://benchmarkheaven.com/jev-models)
 
 ## Development
 

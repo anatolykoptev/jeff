@@ -12,23 +12,62 @@ on-demand list prices (Sep 2026); jev lists $0.042 per 1M input tokens.
 
 ## JevBench (bench/jevbench.py, 2026-09-19)
 
-[JevBench](https://github.com/fstandhartinger/jevbench) v1.2.1 (commit `69b922b`) is Benchmark
-Heaven's benchmark for jev-class decision models. The three public tiers (231 decisions: easy 48,
-standard 72, hard 111) were run one request at a time from a laptop in North America through
-jevbench's own `typesafe` adapter, runner and scoring code, against jeff on the laptop (MPS,
-fp32), jeff on Modal L4 (`modal serve`, bf16, flash) and jev's production API on the same day.
-Per-item records: `bench/results/jevbench/<run>/<tier>.jsonl`; rerun with
+[JevBench](https://github.com/fstandhartinger/jevbench) is Benchmark Heaven's benchmark for
+jev-class decision models. jeff is an official entrant since v1.2.2 (commit `e105a48`), run by
+the benchmark's author on the full 534-decision set including the held-out items and the judge
+tier. Interactive leaderboard: [benchmarkheaven.com/jev-models](https://benchmarkheaven.com/jev-models).
+
+### Official result (JevBench v1.2.2, run by Benchmark Heaven)
+
+Setup as recorded in jevbench's `docs/v1.2-additions.md`: jeff at commit `6f43d3e` with
+`knowledgator/gliformer-large-v1` and server defaults, on the author's CPU (4 threads of a
+Ryzen 5 3600), through the existing `typesafe` adapter. Latency carries the self-hosted
+adjustment (x2 + 0.15 s). Cost is jevbench's estimate for an encoder of this size at hosted
+provider prices ($0.01/M input tokens), not a Modal number.
+
+| | jeff | Jev 1.13.0 | #1 classifier.dev (fast) |
+|---|---:|---:|---:|
+| **JevBench Score (rank of 18)** | **66.9 (#9)** | 75.3 (#2) | 84.8 (#1) |
+| Intelligence | 63.9 | 90.4 | 90.1 |
+| Calibration | 64.6 | 82.7 | 77.9 |
+| Speed | 63.5 | 83.3 | 87.6 |
+| Cost | 76.6 | 51.7 | 84.3 |
+| easy / standard / judge / hard accuracy | 100 / 76.0 / 61.6 / 37.7% | 100 / 99.0 / 94.5 / 74.1% | 100 / 99.0 / 97.3 / 70.5% |
+| hard-tier ECE / Brier | 0.185 / 0.745 | 0.061 / 0.340 | 0.091 / 0.360 |
+| $ per 1,000 decisions | $0.0060 est. | $0.0406 | $0.0033 est. |
+| p50 raw -> adjusted | 0.94 s -> 2.03 s (CPU) | 0.65 s | 0.39 s |
+
+jeff ranks #9 of 18, one place above the other pure-encoder entrants of similar size
+(openJev Verdict 151M at #11, open-jev-deberta-v3-large at #13) and below Laya (421M, #5),
+whose lower Intelligence (63.2) is offset by a cheaper cost estimate and faster CPU latency.
+jeff's rank is carried by Cost (#5 of 18); Intelligence is #14 and Speed #16, the latter
+because the 4-thread CPU run has a 10.97 s p95 on long hard-tier items. Per-subject accuracy
+on the official run: everyday language 84.8%, math and numbers 69.0%, coding 67.9%, finance
+46.9%, support and operations 47.9%, rules/policy/law 40.3%, safety 50.0%. Hard-tier families
+on all 220 items: ambiguous 0/14, long_policy 5/38, multi_hop 17/35, judge_hard 17/33,
+temporal_numeric 10/30, trap 11/16, adversarial 7/12.
+
+### Our own runs of the public tiers
+
+The three public tiers (231 decisions: easy 48, standard 72, hard 111) were run one request
+at a time from a laptop in North America through jevbench's own `typesafe` adapter, runner and
+scoring code, against jeff on the laptop (MPS, fp32), jeff on Modal L4 (`modal serve`, bf16,
+flash) and jev's production API on the same day. Per-item records:
+`bench/results/jevbench/<run>/<tier>.jsonl`; rerun with
 `uv run python bench/jevbench.py run ...` and regenerate the tables with
-`uv run python bench/jevbench.py summarize`.
+`uv run python bench/jevbench.py summarize`. Our public-tier accuracies match the official run
+(easy 100%, standard 75-76%, hard 38-39% on the public 111 vs 37.7% on all 220), which is the
+main reason to keep these runs: they reproduce the official number and add a GPU latency
+measurement the official CPU run does not have.
 
-Caveats before the numbers: the judge tier (146 items) and the held-out halves of the other
-tiers are not published, so the Intelligence axis is renormalised over the public tiers
-(hard 30, standard 28, easy 14) and Speed uses the standard tier instead of jevbench's
-242-item standard+judge run. jeff's cost is a labelled estimate, not a tariff. The jevbench
-score column is therefore indicative only; the published-systems table shows what the same
-public items give for the official entrants.
+Caveats: the judge tier (146 items) and the held-out halves of the other tiers are not
+published, so the Intelligence axis below is renormalised over the public tiers (hard 30,
+standard 28, easy 14) and Speed uses the standard tier instead of jevbench's 242-item
+standard+judge run. jeff's cost here is the Modal L4 estimate, not a tariff. The score column
+is therefore indicative only; the published-systems table shows what the same public items
+give for the official entrants.
 
-### JevBench public tiers (jevbench @ 69b922b, one request at a time)
+### JevBench public tiers (jevbench @ e105a48, one request at a time)
 
 | run | endpoint | easy (48) | standard (72) | hard (111) | hard Brier | hard ECE | hard fidelity | std p50 ms | std p95 ms | hard p50 ms | first ms | $/1k decisions |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -38,13 +77,15 @@ public items give for the official entrants.
 
 #### Published systems on the same public items (jevbench results/v1.2 per-task artifact)
 
-| system | easy (48) | standard (72) | hard (111) | official hard (220) | official JevBench Score |
+| system | easy (48) | standard (72) | hard (111) | official hard (220) | official JevBench Score (rank) |
 |---|---:|---:|---:|---:|---:|
-| Jev 1.13.0 (TypeSafe AI) | 100.0% | 98.6% | 73.0% | 74.1% | 75.3 |
-| djev (Maisa, diffusion-gemma) | 100.0% | 98.6% | 67.6% | 69.5% | 74.3 |
-| SemIf, formerly OpenJev (Qwen3.5-4B, TheoLeeCJ) | 100.0% | 98.6% | 61.3% | 59.5% | 74.6 |
-| system-one-open (Gemma 4 E2B LoRA on an L4) | 100.0% | 93.1% | 48.6% | 49.1% | 68.7 |
-| open-jev-deberta-v3-large (local CPU) | 100.0% | 43.1% | 37.8% | 36.4% | 64.4 |
+| classifier.dev (fast tier) | 100.0% | 98.6% | 70.3% | 70.5% | 84.8 (#1) |
+| Jev 1.13.0 (TypeSafe AI) | 100.0% | 98.6% | 73.0% | 74.1% | 75.3 (#2) |
+| djev (Maisa, diffusion-gemma) | 100.0% | 98.6% | 67.6% | 69.5% | 74.3 (#4) |
+| SemIf, formerly OpenJev (Qwen3.5-4B, TheoLeeCJ) | 100.0% | 98.6% | 61.3% | 59.5% | 74.6 (#3) |
+| Laya (Convai Innovations, ModernBERT-large 421M) | 95.8% | 69.4% | 35.1% | 34.1% | 70.1 (#5) |
+| jeff (Logan Markewich, GLiFormer 400M) | 100.0% | 75.0% | 38.7% | 37.7% | 66.9 (#9) |
+| open-jev-deberta-v3-large (local CPU) | 100.0% | 43.1% | 37.8% | 36.4% | 64.4 (#13) |
 
 #### JevBench Score axes (composite_v12; Intelligence without the unpublished judge tier)
 
@@ -98,8 +139,9 @@ Findings:
 - **Cost.** $0.017 per 1,000 decisions at the L4 estimate vs jev's $0.038 (jeff also counts
   fewer tokens on the hard tier: 1,116 vs 1,506 mean, DeBERTa vs jev billing tokens).
 - **Score, with the caveats above:** 68.6 for jeff on L4 vs 75.6 for jev on the same items
-  (jev's official score is 75.3). Intelligence alone is 65 vs 88. fp32 MPS and bf16 L4 differ
-  by one item on the standard and one on the hard tier.
+  (official: 66.9 and 75.3). The L4 run scores higher than the official CPU row because its
+  Speed axis is 83 instead of 63.5; Intelligence is the same (65 vs 64). fp32 MPS and bf16 L4
+  differ by one item on the standard and one on the hard tier.
 
 ## Recommendation (2026-09-18)
 

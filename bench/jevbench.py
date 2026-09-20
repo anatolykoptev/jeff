@@ -35,13 +35,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 JEVBENCH_URL = "https://github.com/fstandhartinger/jevbench"
-JEVBENCH_COMMIT = "69b922bf2b890ce9809d239c6e2c583b7b080e5d"  # v1.2.1, 2026-09-19
+JEVBENCH_COMMIT = "e105a48f8cdb7f3babb3594424f73e5d7bdc97b9"  # v1.2.2, 2026-09-19 (adds jeff)
 CACHE = ROOT / "bench" / ".jevbench"
 REPO = CACHE / "repo"
 OUT = ROOT / "bench" / "results" / "jevbench"
 TIERS = {"easy": "easy", "standard": "original", "hard": "hard"}  # jevbench tier -> public dataset file
 ENDPOINT_KINDS = ("api", "gpu", "cpu", "demo")
-PUBLISHED = ["jev-1.13.0", "djev", "semif-qwen3.5-4b", "system-one-open", "open-jev-deberta-v3-large"]
+PUBLISHED = [
+    "classifier-dev-fast",
+    "jev-1.13.0",
+    "djev",
+    "semif-qwen3.5-4b",
+    "laya",
+    "jeff",
+    "open-jev-deberta-v3-large",
+]
 
 
 def ensure_repo() -> Path:
@@ -225,6 +233,10 @@ def score_run(run_dir: Path) -> dict:
     }
 
 
+def official_rows() -> list[dict]:
+    return json.loads((REPO / "results" / "v1.2" / "jevbench-v1.2-results.json").read_text())["systems"]
+
+
 def published_rows() -> list[dict]:
     """Published systems scored on the same public items (jevbench's per-task artifact) plus their official row."""
     per_task = json.loads((REPO / "results" / "v1.2" / "jevbench-v1.2-per-task.json").read_text())
@@ -280,14 +292,17 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         )
     print()
     print("### Published systems on the same public items (jevbench results/v1.2 per-task artifact)\n")
-    print("| system | easy (48) | standard (72) | hard (111) | official hard (220) | official JevBench Score |")
+    print("| system | easy (48) | standard (72) | hard (111) | official hard (220) | official JevBench Score (rank) |")
     print("|---|---:|---:|---:|---:|---:|")
+    ranked = sorted((r for r in official_rows() if r["ranked"]), key=lambda r: -r["jevbench_score"])
+    rank = {r["key"]: i + 1 for i, r in enumerate(ranked)}
     for p in published_rows():
         c = p["public"]
         off = p["official"] or {}
         print(
             f"| {p['display']} | {_pct(c['easy'][0] / c['easy'][1])} | {_pct(c['standard'][0] / c['standard'][1])} | "
-            f"{_pct(c['hard'][0] / c['hard'][1])} | {_pct((off.get('tiers') or {}).get('hard'))} | {_f(off.get('jevbench_score'), 1)} |"
+            f"{_pct(c['hard'][0] / c['hard'][1])} | {_pct((off.get('tiers') or {}).get('hard'))} | "
+            f"{_f(off.get('jevbench_score'), 1)}{f' (#{rank[p["key"]]})' if p['key'] in rank else ''} |"
         )
     print()
     print("### JevBench Score axes (composite_v12; Intelligence without the unpublished judge tier)\n")
