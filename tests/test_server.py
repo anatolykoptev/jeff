@@ -103,3 +103,29 @@ def test_dynamic_batching_coalesces():
         assert results == [200] * 6
         assert max(backend.batches) > 1, backend.batches
         assert c.get("/stats").json()["requests"] == 6
+
+
+def test_auth_checked_before_body_validation():
+    with make_client(api_keys=["k1"])[0] as c:
+        for body in ({}, {"state": "x"}):
+            r = c.post("/v1/systemone", json=body)
+            assert r.status_code == 401, (body, r.status_code, r.text)
+        r = c.post("/v1/systemone", content=b"{not json", headers={"Content-Type": "application/json"})
+        assert r.status_code == 401, r.text
+
+
+def test_non_json_body_is_422_not_500():
+    # A body sent without a JSON content type (curl -d defaults to form-urlencoded)
+    # reaches the validation handler as raw bytes, which used to raise TypeError -> 500.
+    with make_client(api_keys=["k1"])[0] as c:
+        for ctype, body in (("application/x-www-form-urlencoded", b"{}"), ("application/json", b"{not json")):
+            r = c.post("/v1/systemone", content=body, headers={"Content-Type": ctype, "Authorization": "Bearer k1"})
+            assert r.status_code == 422, (ctype, r.status_code, r.text)
+            assert isinstance(r.json()["detail"], list)
+
+
+def test_stats_requires_auth_when_keys_set():
+    with make_client(api_keys=["k1"])[0] as c:
+        assert c.get("/stats").status_code == 401
+        assert c.get("/stats", headers={"Authorization": "Bearer k1"}).status_code == 200
+        assert c.get("/healthz").status_code == 200

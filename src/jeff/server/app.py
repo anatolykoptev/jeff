@@ -10,6 +10,7 @@ from dataclasses import asdict
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -27,6 +28,9 @@ from .config import Settings
 
 log = logging.getLogger("jeff")
 REQUEST_ID_HEADER = "x-typesafe-request-id"
+# Paths that require a bearer key when api_keys is set. Checked in middleware so
+# an unauthenticated request is rejected before FastAPI parses its body.
+PROTECTED_PATHS = ("/v1/", "/stats")
 
 
 class _Bucket:
@@ -89,11 +93,15 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @app.exception_handler(RequestValidationError)
     async def _on_validation(request: Request, exc: RequestValidationError):
         # Preserve the SDK's expected validation shape without non-serializable ctx objects.
+        # A malformed JSON body arrives as raw bytes in `input`; decode it so the
+        # response serializes instead of raising (which surfaced as HTTP 500).
         detail = []
         for e in exc.errors():
             d = {k: v for k, v in e.items() if k in ("loc", "msg", "type", "input")}
+            if isinstance(d.get("input"), (bytes, bytearray)):
+                d["input"] = bytes(d["input"]).decode("utf-8", "replace")
             detail.append(d)
-        return JSONResponse({"detail": detail}, status_code=422)
+        return JSONResponse(jsonable_encoder({"detail": detail}), status_code=422)
 
     def _auth(request: Request) -> str | JSONResponse:
         if not cfg.api_keys:
@@ -105,6 +113,14 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         if key not in cfg.api_keys:
             return _error(401, "authentication_error", "Invalid API key")
         return key
+
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        if request.url.path.startswith(PROTECTED_PATHS):
+            who = _auth(request)
+            if isinstance(who, JSONResponse):
+                return who
+        return await call_next(request)
 
     @app.get("/healthz")
     @app.post("/healthz")  # POST lets load tests measure ingress without inference
