@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 import uuid
@@ -30,7 +31,22 @@ log = logging.getLogger("jeff")
 REQUEST_ID_HEADER = "x-typesafe-request-id"
 # Paths that require a bearer key when api_keys is set. Checked in middleware so
 # an unauthenticated request is rejected before FastAPI parses its body.
-PROTECTED_PATHS = ("/v1/", "/stats")
+PROTECTED_PREFIXES = ("/v1/", "/stats/")
+PROTECTED_EXACT = ("/stats",)
+
+
+def _route_path(request: Request) -> str:
+    """The path routing matches on: scope path minus root_path (as Starlette's
+    get_route_path does). request.url.path keeps the root_path prefix, so
+    matching on it would let /<root>/stats skip the auth check."""
+    path, root = request.scope["path"], request.scope.get("root_path", "")
+    if root and path.startswith(root):
+        path = path[len(root) :] or "/"
+    return path
+
+
+def _is_protected(path: str) -> bool:
+    return path in PROTECTED_EXACT or path.startswith(PROTECTED_PREFIXES)
 
 
 class _Bucket:
@@ -78,6 +94,28 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     bucket = _Bucket(cfg.rate_limit_rps, cfg.rate_limit_burst) if cfg.rate_limit_rps > 0 else None
     accepted_models = {cfg.model_name, *cfg.model_aliases}
 
+    def _auth(request: Request) -> str | JSONResponse:
+        if not cfg.api_keys:
+            return "anonymous"
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            return _error(401, "authentication_error", "Missing bearer token")
+        key = auth[7:].strip()
+        if not any(hmac.compare_digest(key, k) for k in cfg.api_keys):
+            return _error(401, "authentication_error", "Invalid API key")
+        return key
+
+    # Registered BEFORE request_id: Starlette runs the last-registered middleware
+    # outermost, so request_id wraps this one and a 401 still carries the
+    # request-id and timing headers.
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        if _is_protected(_route_path(request)):
+            who = _auth(request)
+            if isinstance(who, JSONResponse):
+                return who
+        return await call_next(request)
+
     @app.middleware("http")
     async def request_id(request: Request, call_next):
         rid = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
@@ -102,25 +140,6 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
                 d["input"] = bytes(d["input"]).decode("utf-8", "replace")
             detail.append(d)
         return JSONResponse(jsonable_encoder({"detail": detail}), status_code=422)
-
-    def _auth(request: Request) -> str | JSONResponse:
-        if not cfg.api_keys:
-            return "anonymous"
-        auth = request.headers.get("authorization", "")
-        if not auth.lower().startswith("bearer "):
-            return _error(401, "authentication_error", "Missing bearer token")
-        key = auth[7:].strip()
-        if key not in cfg.api_keys:
-            return _error(401, "authentication_error", "Invalid API key")
-        return key
-
-    @app.middleware("http")
-    async def require_auth(request: Request, call_next):
-        if request.url.path.startswith(PROTECTED_PATHS):
-            who = _auth(request)
-            if isinstance(who, JSONResponse):
-                return who
-        return await call_next(request)
 
     @app.get("/healthz")
     @app.post("/healthz")  # POST lets load tests measure ingress without inference

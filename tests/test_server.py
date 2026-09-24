@@ -129,3 +129,21 @@ def test_stats_requires_auth_when_keys_set():
         assert c.get("/stats").status_code == 401
         assert c.get("/stats", headers={"Authorization": "Bearer k1"}).status_code == 200
         assert c.get("/healthz").status_code == 200
+
+
+def test_auth_rejection_keeps_request_id_header():
+    with make_client(api_keys=["k1"])[0] as c:
+        r = c.post("/v1/systemone", json=SCORE_REQ, headers={"x-typesafe-request-id": "abc"})
+        assert r.status_code == 401
+        assert r.headers.get("x-typesafe-request-id") == "abc"
+        assert "x-jeff-server-ms" in r.headers
+
+
+def test_auth_not_bypassed_under_root_path():
+    s = Settings(api_keys=["k1"])
+    app = create_app(s, Engine(FakeBackend(), s.model_name))
+    with TestClient(app, root_path="/jeff") as c:
+        assert c.get("/jeff/stats").status_code == 401
+        assert c.post("/jeff/v1/systemone", json={}).status_code == 401
+        ok = c.post("/jeff/v1/systemone", json=SCORE_REQ, headers={"Authorization": "Bearer k1"})
+        assert ok.status_code == 200, ok.text
