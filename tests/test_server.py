@@ -103,3 +103,57 @@ def test_dynamic_batching_coalesces():
         assert results == [200] * 6
         assert max(backend.batches) > 1, backend.batches
         assert c.get("/stats").json()["requests"] == 6
+
+
+def test_auth_checked_before_body_validation():
+    with make_client(api_keys=["k1"])[0] as c:
+        for body in ({}, {"state": "x"}):
+            r = c.post("/v1/systemone", json=body)
+            assert r.status_code == 401, (body, r.status_code, r.text)
+        r = c.post("/v1/systemone", content=b"{not json", headers={"Content-Type": "application/json"})
+        assert r.status_code == 401, r.text
+
+
+def test_non_json_body_is_422_not_500():
+    # A body sent without a JSON content type (curl -d defaults to form-urlencoded)
+    # reaches the validation handler as raw bytes, which used to raise TypeError -> 500.
+    with make_client(api_keys=["k1"])[0] as c:
+        for ctype, body in (("application/x-www-form-urlencoded", b"{}"), ("application/json", b"{not json")):
+            r = c.post("/v1/systemone", content=body, headers={"Content-Type": ctype, "Authorization": "Bearer k1"})
+            assert r.status_code == 422, (ctype, r.status_code, r.text)
+            assert isinstance(r.json()["detail"], list)
+
+
+def test_stats_requires_auth_when_keys_set():
+    with make_client(api_keys=["k1"])[0] as c:
+        assert c.get("/stats").status_code == 401
+        assert c.get("/stats", headers={"Authorization": "Bearer k1"}).status_code == 200
+        assert c.get("/healthz").status_code == 200
+
+
+def test_auth_rejection_keeps_request_id_header():
+    with make_client(api_keys=["k1"])[0] as c:
+        r = c.post("/v1/systemone", json=SCORE_REQ, headers={"x-typesafe-request-id": "abc"})
+        assert r.status_code == 401
+        assert r.headers.get("x-typesafe-request-id") == "abc"
+        assert "x-jeff-server-ms" in r.headers
+
+
+def test_auth_not_bypassed_under_root_path():
+    s = Settings(api_keys=["k1"])
+    app = create_app(s, Engine(FakeBackend(), s.model_name))
+    with TestClient(app, root_path="/jeff") as c:
+        assert c.get("/jeff/stats").status_code == 401
+        assert c.post("/jeff/v1/systemone", json={}).status_code == 401
+        ok = c.post("/jeff/v1/systemone", json=SCORE_REQ, headers={"Authorization": "Bearer k1"})
+        assert ok.status_code == 200, ok.text
+
+
+def test_non_ascii_bearer_is_401_not_500():
+    s = Settings(api_keys=["k1"])
+    app = create_app(s, Engine(FakeBackend(), s.model_name))
+    with TestClient(app, raise_server_exceptions=False) as c:
+        for path, method in (("/stats", "GET"), ("/v1/systemone", "POST")):
+            r = c.request(method, path, headers=[(b"authorization", b"Bearer \xe9t\xe9")], json=SCORE_REQ)
+            assert r.status_code == 401, (path, r.status_code, r.text)
+            assert "x-typesafe-request-id" in r.headers

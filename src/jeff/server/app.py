@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 import uuid
@@ -10,8 +11,10 @@ from dataclasses import asdict
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette._utils import get_route_path
 
 from ..core.engine import Engine
 from ..core.groups import PromptOptions, build_groups
@@ -27,6 +30,21 @@ from .config import Settings
 
 log = logging.getLogger("jeff")
 REQUEST_ID_HEADER = "x-typesafe-request-id"
+# Paths that require a bearer key when api_keys is set. Checked in middleware so
+# an unauthenticated request is rejected before FastAPI parses its body.
+PROTECTED_PREFIXES = ("/v1/", "/stats/")
+PROTECTED_EXACT = ("/stats",)
+
+
+def _route_path(request: Request) -> str:
+    """The path routing matches on (root_path stripped). request.url.path keeps
+    the root_path prefix, so matching on it would let /<root>/stats skip auth.
+    Uses Starlette's own helper so auth and routing cannot disagree."""
+    return get_route_path(request.scope)
+
+
+def _is_protected(path: str) -> bool:
+    return path in PROTECTED_EXACT or path.startswith(PROTECTED_PREFIXES)
 
 
 class _Bucket:
@@ -74,6 +92,33 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     bucket = _Bucket(cfg.rate_limit_rps, cfg.rate_limit_burst) if cfg.rate_limit_rps > 0 else None
     accepted_models = {cfg.model_name, *cfg.model_aliases}
 
+    def _auth(request: Request) -> str | JSONResponse:
+        if not cfg.api_keys:
+            return "anonymous"
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            return _error(401, "authentication_error", "Missing bearer token")
+        key = auth[7:].strip()
+        # Bytes, not str: compare_digest raises TypeError on non-ASCII str, and a
+        # latin-1-decoded header can be non-ASCII -> an unauthenticated 500.
+        # Every key is compared (no short-circuit) so timing does not leak which.
+        kb = key.encode()
+        matched = [hmac.compare_digest(kb, k.encode()) for k in cfg.api_keys]
+        if not any(matched):
+            return _error(401, "authentication_error", "Invalid API key")
+        return key
+
+    # Registered BEFORE request_id: Starlette runs the last-registered middleware
+    # outermost, so request_id wraps this one and a 401 still carries the
+    # request-id and timing headers.
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        if _is_protected(_route_path(request)):
+            who = _auth(request)
+            if isinstance(who, JSONResponse):
+                return who
+        return await call_next(request)
+
     @app.middleware("http")
     async def request_id(request: Request, call_next):
         rid = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
@@ -89,22 +134,15 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @app.exception_handler(RequestValidationError)
     async def _on_validation(request: Request, exc: RequestValidationError):
         # Preserve the SDK's expected validation shape without non-serializable ctx objects.
+        # A malformed JSON body arrives as raw bytes in `input`; decode it so the
+        # response serializes instead of raising (which surfaced as HTTP 500).
         detail = []
         for e in exc.errors():
             d = {k: v for k, v in e.items() if k in ("loc", "msg", "type", "input")}
+            if isinstance(d.get("input"), (bytes, bytearray)):
+                d["input"] = bytes(d["input"]).decode("utf-8", "replace")
             detail.append(d)
-        return JSONResponse({"detail": detail}, status_code=422)
-
-    def _auth(request: Request) -> str | JSONResponse:
-        if not cfg.api_keys:
-            return "anonymous"
-        auth = request.headers.get("authorization", "")
-        if not auth.lower().startswith("bearer "):
-            return _error(401, "authentication_error", "Missing bearer token")
-        key = auth[7:].strip()
-        if key not in cfg.api_keys:
-            return _error(401, "authentication_error", "Invalid API key")
-        return key
+        return JSONResponse(jsonable_encoder({"detail": detail}), status_code=422)
 
     @app.get("/healthz")
     @app.post("/healthz")  # POST lets load tests measure ingress without inference
