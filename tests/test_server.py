@@ -147,3 +147,13 @@ def test_auth_not_bypassed_under_root_path():
         assert c.post("/jeff/v1/systemone", json={}).status_code == 401
         ok = c.post("/jeff/v1/systemone", json=SCORE_REQ, headers={"Authorization": "Bearer k1"})
         assert ok.status_code == 200, ok.text
+
+
+def test_non_ascii_bearer_is_401_not_500():
+    s = Settings(api_keys=["k1"])
+    app = create_app(s, Engine(FakeBackend(), s.model_name))
+    with TestClient(app, raise_server_exceptions=False) as c:
+        for path, method in (("/stats", "GET"), ("/v1/systemone", "POST")):
+            r = c.request(method, path, headers=[(b"authorization", b"Bearer \xe9t\xe9")], json=SCORE_REQ)
+            assert r.status_code == 401, (path, r.status_code, r.text)
+            assert "x-typesafe-request-id" in r.headers

@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette._utils import get_route_path
 
 from ..core.engine import Engine
 from ..core.groups import PromptOptions, build_groups
@@ -36,13 +37,10 @@ PROTECTED_EXACT = ("/stats",)
 
 
 def _route_path(request: Request) -> str:
-    """The path routing matches on: scope path minus root_path (as Starlette's
-    get_route_path does). request.url.path keeps the root_path prefix, so
-    matching on it would let /<root>/stats skip the auth check."""
-    path, root = request.scope["path"], request.scope.get("root_path", "")
-    if root and path.startswith(root):
-        path = path[len(root) :] or "/"
-    return path
+    """The path routing matches on (root_path stripped). request.url.path keeps
+    the root_path prefix, so matching on it would let /<root>/stats skip auth.
+    Uses Starlette's own helper so auth and routing cannot disagree."""
+    return get_route_path(request.scope)
 
 
 def _is_protected(path: str) -> bool:
@@ -101,7 +99,12 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         if not auth.lower().startswith("bearer "):
             return _error(401, "authentication_error", "Missing bearer token")
         key = auth[7:].strip()
-        if not any(hmac.compare_digest(key, k) for k in cfg.api_keys):
+        # Bytes, not str: compare_digest raises TypeError on non-ASCII str, and a
+        # latin-1-decoded header can be non-ASCII -> an unauthenticated 500.
+        # Every key is compared (no short-circuit) so timing does not leak which.
+        kb = key.encode()
+        matched = [hmac.compare_digest(kb, k.encode()) for k in cfg.api_keys]
+        if not any(matched):
             return _error(401, "authentication_error", "Invalid API key")
         return key
 
